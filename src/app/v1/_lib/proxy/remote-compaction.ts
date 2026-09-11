@@ -44,7 +44,8 @@ export class RemoteCompactionTokenError extends Error {
   }
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
+/** 宽松地把 unknown 收窄成普通对象，供协议层各处复用。 */
+export function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;

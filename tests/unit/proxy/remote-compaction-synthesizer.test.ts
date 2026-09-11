@@ -96,21 +96,24 @@ function installInMemoryCacheStore(): Map<string, string> {
 type LockCall = "acquire" | "release";
 
 /** 可控的锁实现：记录调用，并可指定是否抢到锁。 */
-function installLock(options: { acquire?: boolean; calls?: LockCall[] }): LockCall[] {
-  const calls = options.calls ?? [];
+function installLock(options: { acquire?: boolean }): { calls: LockCall[]; owners: string[] } {
+  const calls: LockCall[] = [];
+  const owners: string[] = [];
   setRemoteCompactionLockForTests(
     {
-      tryAcquire: async () => {
+      tryAcquire: async (_key, owner) => {
         calls.push("acquire");
+        owners.push(owner);
         return options.acquire ?? true;
       },
-      release: async () => {
+      release: async (_key, owner) => {
         calls.push("release");
+        owners.push(owner);
       },
     },
     /* waitMs */ 40
   );
-  return calls;
+  return { calls, owners };
 }
 
 function sseEvents(body: string): { event: string; data: Record<string, unknown> }[] {
@@ -313,11 +316,14 @@ describe("remote compaction synthesis", () => {
       })
     );
 
-    const calls = installLock({});
+    const lock = installLock({});
     const { session } = makeSession({ remoteCompactionV2: true });
     await tryRemoteCompactionSynthesis(session);
 
-    expect(calls).toEqual(["acquire", "release"]);
+    expect(lock.calls).toEqual(["acquire", "release"]);
+    // 释放必须带同一个 owner token，否则会误删别人的锁
+    expect(lock.owners[1]).toBe(lock.owners[0]);
+    expect(lock.owners[0]).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   it("reuses the result of a concurrent request instead of calling upstream", async () => {
@@ -372,13 +378,13 @@ describe("remote compaction synthesis", () => {
       })
     );
 
-    const calls = installLock({ acquire: false });
+    const lock = installLock({ acquire: false });
     const { session } = makeSession({ remoteCompactionV2: true });
     const response = await tryRemoteCompactionSynthesis(session);
 
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(await response!.text()).toContain("response.completed");
     // 没抢到锁就不该释放别人的锁
-    expect(calls).toEqual(["acquire"]);
+    expect(lock.calls).toEqual(["acquire"]);
   });
 });

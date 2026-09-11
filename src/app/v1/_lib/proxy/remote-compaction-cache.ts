@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { getRedisClient } from "@/lib/redis/client";
 import { RedisKVStore } from "@/lib/redis/redis-kv-store";
 
@@ -41,18 +41,28 @@ let lockOverride: CompactionLockOps | null = null;
 let lockWaitMsOverride: number | null = null;
 
 export interface CompactionLockOps {
-  tryAcquire(key: string, ttlMs: number): Promise<boolean>;
-  release(key: string): Promise<void>;
+  tryAcquire(key: string, owner: string, ttlMs: number): Promise<boolean>;
+  release(key: string, owner: string): Promise<void>;
 }
 
 interface LockRedisClient {
   status?: string;
   set(key: string, value: string, mode: "PX", ttlMs: number, nx: "NX"): Promise<unknown>;
-  del(key: string): Promise<unknown>;
+  eval(script: string, numKeys: number, key: string, arg: string): Promise<unknown>;
 }
 
+/**
+ * 只有锁的当前持有者才能释放它：租约过期后另一个实例可能已经拿到锁，
+ * 此时旧持有者直接 DEL 会把别人的锁删掉。
+ */
+const LUA_RELEASE_IF_OWNER = `
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0`;
+
 const defaultLockOps: CompactionLockOps = {
-  async tryAcquire(key, ttlMs) {
+  async tryAcquire(key, owner, ttlMs) {
     const redis = getRedisClient({
       allowWhenRateLimitDisabled: true,
     }) as unknown as LockRedisClient | null;
@@ -61,13 +71,13 @@ const defaultLockOps: CompactionLockOps = {
       return true;
     }
     try {
-      const result = await redis.set(key, "1", "PX", ttlMs, "NX");
+      const result = await redis.set(key, owner, "PX", ttlMs, "NX");
       return result === "OK";
     } catch {
       return true;
     }
   },
-  async release(key) {
+  async release(key, owner) {
     const redis = getRedisClient({
       allowWhenRateLimitDisabled: true,
     }) as unknown as LockRedisClient | null;
@@ -75,7 +85,7 @@ const defaultLockOps: CompactionLockOps = {
       return;
     }
     try {
-      await redis.del(key);
+      await redis.eval(LUA_RELEASE_IF_OWNER, 1, key, owner);
     } catch {
       /* 释放失败只影响下一次重试，不影响本次结果 */
     }
@@ -147,12 +157,14 @@ export async function writeCachedCompaction(
  * 拿不到锁说明另一个实例/请求正在算同一份摘要，调用方应先用
  * {@link waitForCachedCompaction} 等一小会儿，等不到再自己算。
  */
-export async function acquireCompactionLock(fingerprint: string): Promise<boolean> {
-  return resolveLockOps().tryAcquire(lockKey(fingerprint), LOCK_LEASE_MS);
+export async function acquireCompactionLock(fingerprint: string): Promise<string | null> {
+  const owner = randomUUID();
+  const acquired = await resolveLockOps().tryAcquire(lockKey(fingerprint), owner, LOCK_LEASE_MS);
+  return acquired ? owner : null;
 }
 
-export async function releaseCompactionLock(fingerprint: string): Promise<void> {
-  await resolveLockOps().release(lockKey(fingerprint));
+export async function releaseCompactionLock(fingerprint: string, owner: string): Promise<void> {
+  await resolveLockOps().release(lockKey(fingerprint), owner);
 }
 
 /**

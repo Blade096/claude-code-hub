@@ -2,6 +2,7 @@ import { logger } from "@/lib/logger";
 import { ProxyForwarder } from "./forwarder";
 import { ModelRedirector } from "./model-redirector";
 import {
+  asRecord,
   buildCompactionSummaryInput,
   encodeCompactionSummary,
   isRemoteCompactionV2Request,
@@ -83,7 +84,8 @@ export async function tryRemoteCompactionSynthesis(
 
   // 同一份摘要可能被重复请求：断流后客户端最多重发两次，第一次也可能仍在飞行中。
   // 拿到锁的请求负责生成，没拿到的先等一会儿已有结果，等不到再自己算，避免长时间阻塞。
-  const hasLock = await acquireCompactionLock(fingerprint);
+  const lockOwner = await acquireCompactionLock(fingerprint);
+  const hasLock = lockOwner !== null;
   if (!hasLock) {
     const reused = await waitForCachedCompaction(fingerprint);
     if (reused) {
@@ -101,8 +103,8 @@ export async function tryRemoteCompactionSynthesis(
 
   // 下面两处 return 都必须释放锁，否则后续同名请求只能等到租期结束。
   const releaseLock = async () => {
-    if (hasLock) {
-      await releaseCompactionLock(fingerprint);
+    if (lockOwner) {
+      await releaseCompactionLock(fingerprint, lockOwner);
     }
   };
 
@@ -394,12 +396,6 @@ async function finalizeCompactionRecord(
 
 function numberOrZero(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function buildCompactionSseResponse(

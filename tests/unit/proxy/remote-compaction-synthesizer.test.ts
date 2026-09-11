@@ -9,14 +9,26 @@ vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn() },
 }));
 
-import { decodeCompactionSummary } from "@/app/v1/_lib/proxy/remote-compaction";
+import {
+  decodeCompactionSummary,
+  encodeCompactionSummary,
+} from "@/app/v1/_lib/proxy/remote-compaction";
 import {
   type CachedCompactionResult,
   setRemoteCompactionCacheStoreForTests,
+  setRemoteCompactionLockForTests,
 } from "@/app/v1/_lib/proxy/remote-compaction-cache";
 import { tryRemoteCompactionSynthesis } from "@/app/v1/_lib/proxy/remote-compaction-synthesizer";
 import type { ProxySession } from "@/app/v1/_lib/proxy/session";
 import { RedisKVStore } from "@/lib/redis/redis-kv-store";
+
+function token(summary: string): string {
+  return encodeCompactionSummary({
+    summary,
+    model: "deepseek-v4-pro",
+    createdAtSeconds: 1_700_000_000,
+  });
+}
 
 type FakeSession = {
   session: ProxySession;
@@ -81,6 +93,26 @@ function installInMemoryCacheStore(): Map<string, string> {
   return records;
 }
 
+type LockCall = "acquire" | "release";
+
+/** 可控的锁实现：记录调用，并可指定是否抢到锁。 */
+function installLock(options: { acquire?: boolean; calls?: LockCall[] }): LockCall[] {
+  const calls = options.calls ?? [];
+  setRemoteCompactionLockForTests(
+    {
+      tryAcquire: async () => {
+        calls.push("acquire");
+        return options.acquire ?? true;
+      },
+      release: async () => {
+        calls.push("release");
+      },
+    },
+    /* waitMs */ 40
+  );
+  return calls;
+}
+
 function sseEvents(body: string): { event: string; data: Record<string, unknown> }[] {
   return body
     .split("\n\n")
@@ -99,7 +131,9 @@ describe("remote compaction synthesis", () => {
   beforeEach(() => {
     sendMock.mockReset();
     setRemoteCompactionCacheStoreForTests(null);
+    setRemoteCompactionLockForTests(null);
     installInMemoryCacheStore();
+    installLock({});
   });
 
   it("does nothing when the provider is not opted in", async () => {
@@ -269,5 +303,82 @@ describe("remote compaction synthesis", () => {
     await tryRemoteCompactionSynthesis(other.session);
 
     expect(sendMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("releases the compaction lock after a successful synthesis", async () => {
+    sendMock.mockResolvedValue(
+      new Response(JSON.stringify({ output: [{ content: [{ text: "summary" }] }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    );
+
+    const calls = installLock({});
+    const { session } = makeSession({ remoteCompactionV2: true });
+    await tryRemoteCompactionSynthesis(session);
+
+    expect(calls).toEqual(["acquire", "release"]);
+  });
+
+  it("reuses the result of a concurrent request instead of calling upstream", async () => {
+    const concurrent: CachedCompactionResult = {
+      token: token("CONCURRENT SUMMARY"),
+      compactionId: "cmp_concurrent",
+      responseId: "resp_concurrent",
+      model: "deepseek-v4-pro",
+      inputTokens: 10,
+      outputTokens: 5,
+      totalTokens: 15,
+      cachedTokens: 0,
+      createdAtSeconds: 1,
+    };
+
+    // 第一次读缓存必然落空（另一个请求还没写完），等待窗口内的轮询才拿到结果。
+    let getCalls = 0;
+    setRemoteCompactionCacheStoreForTests(
+      new RedisKVStore<CachedCompactionResult>({
+        prefix: "test:rc2:",
+        defaultTtlSeconds: 60,
+        redisClient: {
+          status: "ready",
+          setex: async () => "OK",
+          get: async () => {
+            getCalls += 1;
+            return getCalls === 1 ? null : JSON.stringify(concurrent);
+          },
+          del: async () => 1,
+          eval: async () => null,
+        } as unknown as never,
+      })
+    );
+    installLock({ acquire: false });
+
+    const { session } = makeSession({ remoteCompactionV2: true });
+    const response = await tryRemoteCompactionSynthesis(session);
+
+    expect(sendMock).not.toHaveBeenCalled();
+    const events = sseEvents(await response!.text());
+    expect(events[0].data.item).toMatchObject({ id: "cmp_concurrent" });
+    expect(
+      decodeCompactionSummary((events[0].data.item as Record<string, unknown>).encrypted_content).s
+    ).toBe("CONCURRENT SUMMARY");
+  });
+
+  it("computes locally when the lock is held and no result appears", async () => {
+    sendMock.mockResolvedValue(
+      new Response(JSON.stringify({ output: [{ content: [{ text: "own summary" }] }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    );
+
+    const calls = installLock({ acquire: false });
+    const { session } = makeSession({ remoteCompactionV2: true });
+    const response = await tryRemoteCompactionSynthesis(session);
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(await response!.text()).toContain("response.completed");
+    // 没抢到锁就不该释放别人的锁
+    expect(calls).toEqual(["acquire"]);
   });
 });

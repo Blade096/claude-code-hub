@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { getRedisClient } from "@/lib/redis/client";
 import { RedisKVStore } from "@/lib/redis/redis-kv-store";
 
 /**
@@ -24,6 +25,11 @@ export type CachedCompactionResult = {
 };
 
 const CACHE_TTL_SECONDS = 900;
+/** 摘要调用的租期上限：锁最多占用这么久，之后允许其他实例重做。 */
+const LOCK_LEASE_MS = 120_000;
+/** 拿不到锁时最多等待已有结果的时间，超时就自己算，避免拖慢压缩。 */
+const LOCK_WAIT_MS = 5_000;
+const LOCK_POLL_INTERVAL_MS = 250;
 
 const defaultStore = new RedisKVStore<CachedCompactionResult>({
   prefix: "cch:remote-compaction:v2:result:",
@@ -31,6 +37,50 @@ const defaultStore = new RedisKVStore<CachedCompactionResult>({
 });
 
 let storeOverride: RedisKVStore<CachedCompactionResult> | null = null;
+let lockOverride: CompactionLockOps | null = null;
+let lockWaitMsOverride: number | null = null;
+
+export interface CompactionLockOps {
+  tryAcquire(key: string, ttlMs: number): Promise<boolean>;
+  release(key: string): Promise<void>;
+}
+
+interface LockRedisClient {
+  status?: string;
+  set(key: string, value: string, mode: "PX", ttlMs: number, nx: "NX"): Promise<unknown>;
+  del(key: string): Promise<unknown>;
+}
+
+const defaultLockOps: CompactionLockOps = {
+  async tryAcquire(key, ttlMs) {
+    const redis = getRedisClient({
+      allowWhenRateLimitDisabled: true,
+    }) as unknown as LockRedisClient | null;
+    if (!redis || redis.status !== "ready") {
+      // Redis 不可用时不做互斥，宁可重复一次也不要卡住压缩。
+      return true;
+    }
+    try {
+      const result = await redis.set(key, "1", "PX", ttlMs, "NX");
+      return result === "OK";
+    } catch {
+      return true;
+    }
+  },
+  async release(key) {
+    const redis = getRedisClient({
+      allowWhenRateLimitDisabled: true,
+    }) as unknown as LockRedisClient | null;
+    if (!redis || redis.status !== "ready") {
+      return;
+    }
+    try {
+      await redis.del(key);
+    } catch {
+      /* 释放失败只影响下一次重试，不影响本次结果 */
+    }
+  },
+};
 
 /** 仅供测试注入内存实现。 */
 export function setRemoteCompactionCacheStoreForTests(
@@ -39,8 +89,25 @@ export function setRemoteCompactionCacheStoreForTests(
   storeOverride = store;
 }
 
+/** 仅供测试注入内存实现。 */
+export function setRemoteCompactionLockForTests(
+  ops: CompactionLockOps | null,
+  waitMs?: number
+): void {
+  lockOverride = ops;
+  lockWaitMsOverride = waitMs ?? null;
+}
+
 function resolveStore(): RedisKVStore<CachedCompactionResult> {
   return storeOverride ?? defaultStore;
+}
+
+function resolveLockOps(): CompactionLockOps {
+  return lockOverride ?? defaultLockOps;
+}
+
+function lockKey(fingerprint: string): string {
+  return `cch:remote-compaction:v2:lock:${fingerprint}`;
 }
 
 /**
@@ -72,4 +139,37 @@ export async function writeCachedCompaction(
   result: CachedCompactionResult
 ): Promise<void> {
   await resolveStore().set(fingerprint, result);
+}
+
+/**
+ * 尝试取得该压缩请求的执行权。
+ *
+ * 拿不到锁说明另一个实例/请求正在算同一份摘要，调用方应先用
+ * {@link waitForCachedCompaction} 等一小会儿，等不到再自己算。
+ */
+export async function acquireCompactionLock(fingerprint: string): Promise<boolean> {
+  return resolveLockOps().tryAcquire(lockKey(fingerprint), LOCK_LEASE_MS);
+}
+
+export async function releaseCompactionLock(fingerprint: string): Promise<void> {
+  await resolveLockOps().release(lockKey(fingerprint));
+}
+
+/**
+ * 轮询等待他人写入的结果。等待窗口故意很短：摘要通常要十几秒，
+ * 长时间等待会把压缩本身拖慢，等不到就自己算更划算。
+ */
+export async function waitForCachedCompaction(
+  fingerprint: string,
+  timeoutMs: number = lockWaitMsOverride ?? LOCK_WAIT_MS
+): Promise<CachedCompactionResult | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_INTERVAL_MS));
+    const cached = await readCachedCompaction(fingerprint);
+    if (cached) {
+      return cached;
+    }
+  }
+  return null;
 }

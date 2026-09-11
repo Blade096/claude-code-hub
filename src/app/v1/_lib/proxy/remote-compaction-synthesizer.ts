@@ -8,8 +8,12 @@ import {
   normalizeInputWithoutTrigger,
 } from "./remote-compaction";
 import {
+  acquireCompactionLock,
+  type CachedCompactionResult,
   compactionFingerprint,
   readCachedCompaction,
+  releaseCompactionLock,
+  waitForCachedCompaction,
   writeCachedCompaction,
 } from "./remote-compaction-cache";
 import { ProxyResponses } from "./responses";
@@ -74,34 +78,33 @@ export async function tryRemoteCompactionSynthesis(
 
   const cached = await readCachedCompaction(fingerprint);
   if (cached) {
-    logger.info("[RemoteCompaction] Reusing cached compaction result", {
-      providerId: provider.id,
-      model: cached.model,
-      tokenBytes: cached.token.length,
-    });
-    await finalizeCompactionRecord(session, {
-      statusCode: 200,
-      durationMs: Date.now() - startedAt,
-      usage: {
-        input_tokens: cached.inputTokens,
-        output_tokens: cached.outputTokens,
-        total_tokens: cached.totalTokens,
-        cached_tokens: cached.cachedTokens,
-      },
-      model: cached.model,
-      reused: true,
-    });
-    return buildCompactionSseResponse(
-      cached.token,
-      {
-        input_tokens: cached.inputTokens,
-        output_tokens: cached.outputTokens,
-        total_tokens: cached.totalTokens,
-        cached_tokens: cached.cachedTokens,
-      },
-      { compactionId: cached.compactionId, responseId: cached.responseId }
-    );
+    return replayCachedCompaction(session, cached, startedAt);
   }
+
+  // 同一份摘要可能被重复请求：断流后客户端最多重发两次，第一次也可能仍在飞行中。
+  // 拿到锁的请求负责生成，没拿到的先等一会儿已有结果，等不到再自己算，避免长时间阻塞。
+  const hasLock = await acquireCompactionLock(fingerprint);
+  if (!hasLock) {
+    const reused = await waitForCachedCompaction(fingerprint);
+    if (reused) {
+      logger.info("[RemoteCompaction] Reused compaction result from a concurrent request", {
+        providerId: provider.id,
+        model: reused.model,
+      });
+      return replayCachedCompaction(session, reused, startedAt);
+    }
+    logger.warn("[RemoteCompaction] Compaction lock held and no result yet; computing anyway", {
+      providerId: provider.id,
+      model: effectiveModel,
+    });
+  }
+
+  // 下面两处 return 都必须释放锁，否则后续同名请求只能等到租期结束。
+  const releaseLock = async () => {
+    if (hasLock) {
+      await releaseCompactionLock(fingerprint);
+    }
+  };
 
   const summaryBody: Record<string, unknown> = {
     model: effectiveModel,
@@ -148,6 +151,7 @@ export async function tryRemoteCompactionSynthesis(
       errorMessage: message,
       model: effectiveModel,
     });
+    await releaseLock();
     return ProxyResponses.buildError(502, `远程压缩失败：${message}`);
   }
 
@@ -188,7 +192,41 @@ export async function tryRemoteCompactionSynthesis(
     usage,
   });
 
+  await releaseLock();
   return buildCompactionSseResponse(token, usage, { compactionId, responseId });
+}
+
+/** 复用缓存或并发请求产出的结果：收敛使用记录并按协议回放同一份事件。 */
+async function replayCachedCompaction(
+  session: ProxySession,
+  cached: CachedCompactionResult,
+  startedAt: number
+): Promise<Response> {
+  logger.info("[RemoteCompaction] Reusing cached compaction result", {
+    providerId: session.provider?.id,
+    model: cached.model,
+    tokenBytes: cached.token.length,
+  });
+
+  const usage: CompactionUsage = {
+    input_tokens: cached.inputTokens,
+    output_tokens: cached.outputTokens,
+    total_tokens: cached.totalTokens,
+    cached_tokens: cached.cachedTokens,
+  };
+
+  await finalizeCompactionRecord(session, {
+    statusCode: 200,
+    durationMs: Date.now() - startedAt,
+    usage,
+    model: cached.model,
+    reused: true,
+  });
+
+  return buildCompactionSseResponse(cached.token, usage, {
+    compactionId: cached.compactionId,
+    responseId: cached.responseId,
+  });
 }
 
 type CompactionUsage = {

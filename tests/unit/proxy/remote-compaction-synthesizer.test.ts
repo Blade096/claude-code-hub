@@ -21,6 +21,10 @@ import {
 import { tryRemoteCompactionSynthesis } from "@/app/v1/_lib/proxy/remote-compaction-synthesizer";
 import type { ProxySession } from "@/app/v1/_lib/proxy/session";
 import { RedisKVStore } from "@/lib/redis/redis-kv-store";
+import {
+  resolveEndpointPolicy,
+  SINGLE_ATTEMPT_ENDPOINT_POLICY,
+} from "@/app/v1/_lib/proxy/endpoint-policy";
 
 function token(summary: string): string {
   return encodeCompactionSummary({
@@ -33,10 +37,15 @@ function token(summary: string): string {
 type FakeSession = {
   session: ProxySession;
   sentBodies: Record<string, unknown>[];
+  singleAttemptCalls: boolean[];
+  abortSignals: (AbortSignal | null)[];
 };
 
 function makeSession(options: { remoteCompactionV2: boolean }): FakeSession {
   const sentBodies: Record<string, unknown>[] = [];
+  const singleAttemptCalls: boolean[] = [];
+  const abortSignals: (AbortSignal | null)[] = [];
+  let singleAttempt = false;
   const request = {
     message: {
       model: "deepseek-v4-pro",
@@ -65,9 +74,21 @@ function makeSession(options: { remoteCompactionV2: boolean }): FakeSession {
     },
     sessionId: "01a08fc2-d8f1-7165-ade4-74a92cbf6f85",
     getOriginalModel: () => "deepseek-v4-pro",
+    clientAbortSignal: null as AbortSignal | null,
+    // 与 session.ts 的实现保持一致：替换中断信号、切换单次尝试策略
+    setInternalRequestAbortSignal(signal: AbortSignal | null) {
+      abortSignals.push(signal);
+      this.clientAbortSignal = signal;
+    },
+    setSingleAttemptMode(enabled: boolean) {
+      singleAttemptCalls.push(enabled);
+      singleAttempt = enabled;
+    },
+    getEndpointPolicy: () =>
+      singleAttempt ? SINGLE_ATTEMPT_ENDPOINT_POLICY : resolveEndpointPolicy("/v1/responses"),
   } as unknown as ProxySession;
 
-  return { session, sentBodies };
+  return { session, sentBodies, singleAttemptCalls, abortSignals };
 }
 
 /** 内存版 Redis KV，用于验证幂等缓存行为。 */
@@ -440,5 +461,52 @@ describe("remote compaction synthesis", () => {
     expect(body).toContain("response.completed");
     // 没抢到锁就不该释放别人的锁
     expect(lock.calls).toEqual(["acquire"]);
+  });
+
+  it("keeps the summary running when the client disconnects", async () => {
+    const clientController = new AbortController();
+    const { session, abortSignals } = makeSession({ remoteCompactionV2: true });
+    session.clientAbortSignal = clientController.signal;
+
+    sendMock.mockImplementation(async (s: ProxySession) => {
+      // 摘要进行中客户端断开
+      clientController.abort();
+      // 摘要请求必须挂在内部信号上，不能被客户端断开带走
+      expect(s.clientAbortSignal?.aborted).toBe(false);
+      return new Response(JSON.stringify({ output: [{ content: [{ text: "survived" }] }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    const response = await tryRemoteCompactionSynthesis(session);
+    const body = await response!.text();
+    expect(body).toContain("response.completed");
+
+    // 结束后恢复客户端信号，内部信号已不再是当前信号
+    expect(abortSignals).toHaveLength(2);
+    expect(abortSignals[0]?.aborted).toBe(false);
+    expect(session.clientAbortSignal).toBe(clientController.signal);
+  });
+
+  it("uses a single-attempt policy for the summary request and restores it", async () => {
+    const { session, singleAttemptCalls } = makeSession({ remoteCompactionV2: true });
+    expect(session.getEndpointPolicy().allowRetry).toBe(true);
+
+    sendMock.mockImplementation(async (s: ProxySession) => {
+      const policy = s.getEndpointPolicy();
+      expect(policy.allowRetry).toBe(false);
+      expect(policy.allowProviderSwitch).toBe(false);
+      return new Response(JSON.stringify({ output: [{ content: [{ text: "summary" }] }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    const response = await tryRemoteCompactionSynthesis(session);
+    await response!.text();
+
+    expect(singleAttemptCalls).toEqual([true, false]);
+    expect(session.getEndpointPolicy().allowRetry).toBe(true);
   });
 });

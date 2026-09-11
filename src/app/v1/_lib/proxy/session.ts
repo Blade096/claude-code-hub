@@ -17,7 +17,11 @@ import type { SpecialSetting } from "@/types/special-settings";
 import type { BillingModelSource, CodexPriorityBillingSource } from "@/types/system-config";
 import type { User } from "@/types/user";
 import { isCountTokensEndpointPath } from "./endpoint-paths";
-import { type EndpointPolicy, resolveEndpointPolicy } from "./endpoint-policy";
+import {
+  type EndpointPolicy,
+  resolveEndpointPolicy,
+  SINGLE_ATTEMPT_ENDPOINT_POLICY,
+} from "./endpoint-policy";
 import { ProxyError } from "./errors";
 import type { ClientFormat } from "./format-mapper";
 import {
@@ -102,7 +106,11 @@ export class ProxySession {
   readonly request: ProxyRequestPayload;
   readonly userAgent: string | null; // User-Agent（用于客户端类型分析）
   readonly context: Context; // Hono Context（用于转换器）
-  readonly clientAbortSignal: AbortSignal | null; // 客户端中断信号
+  /**
+   * 客户端中断信号。内部子请求（例如代上游生成压缩摘要）不该被客户端断开取消，
+   * 因此允许在子请求期间临时替换，见 `setInternalRequestAbortSignal`。
+   */
+  clientAbortSignal: AbortSignal | null;
   userName: string;
   authState: AuthState | null;
   provider: Provider | null;
@@ -131,6 +139,12 @@ export class ProxySession {
   providerType: ProviderType | null = null;
 
   private readonly endpointPolicy: EndpointPolicy;
+
+  /**
+   * 内部子请求标记：置位时 `getEndpointPolicy()` 返回单次尝试策略，
+   * 让 Forwarder 跳过重试与供应商切换，避免把完整会话历史发给别的供应商。
+   */
+  private internalSingleAttemptMode = false;
 
   // 模型重定向追踪：保存原始模型名（重定向前）
   private originalModelName: string | null = null;
@@ -407,6 +421,16 @@ export class ProxySession {
 
   setRawCrossProviderFallbackEnabled(enabled: boolean): void {
     this.rawCrossProviderFallbackEnabled = enabled;
+  }
+
+  /** 内部子请求期间替换中断信号，调用方必须在结束后恢复原值。 */
+  setInternalRequestAbortSignal(signal: AbortSignal | null): void {
+    this.clientAbortSignal = signal;
+  }
+
+  /** 内部子请求开关：只影响 `getEndpointPolicy()` 的返回值。 */
+  setSingleAttemptMode(enabled: boolean): void {
+    this.internalSingleAttemptMode = enabled;
   }
 
   isRawCrossProviderFallbackEnabled(): boolean {
@@ -754,7 +778,7 @@ export class ProxySession {
   }
 
   getEndpointPolicy(): EndpointPolicy {
-    return this.endpointPolicy;
+    return this.internalSingleAttemptMode ? SINGLE_ATTEMPT_ENDPOINT_POLICY : this.endpointPolicy;
   }
 
   /**

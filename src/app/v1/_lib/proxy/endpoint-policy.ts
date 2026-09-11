@@ -49,6 +49,17 @@ const RAW_PASSTHROUGH_ENDPOINT_POLICY: EndpointPolicy = Object.freeze({
   endpointPoolStrictness: "strict",
 });
 
+/**
+ * 内部子请求（例如 CCH 代替上游生成压缩摘要）使用的策略：
+ * 保留普通对话端点的预处理，但禁止重试与供应商切换。
+ * 完整会话历史不能被转发到另一个供应商，也不能因为一次失败被重复放大。
+ */
+export const SINGLE_ATTEMPT_ENDPOINT_POLICY: EndpointPolicy = Object.freeze({
+  ...DEFAULT_ENDPOINT_POLICY,
+  allowRetry: false,
+  allowProviderSwitch: false,
+});
+
 const rawPassthroughEndpointPathSet = new Set<string>([
   V1_ENDPOINT_PATHS.MESSAGES_COUNT_TOKENS,
   V1_ENDPOINT_PATHS.RESPONSES_COMPACT,

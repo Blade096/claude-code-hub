@@ -30,6 +30,8 @@ import type { ProxySession } from "./session";
  */
 
 const SUMMARY_MAX_OUTPUT_TOKENS = 4096;
+/** 摘要子请求自己的超时：客户端断开不会取消它，所以必须自己兜住。 */
+const SUMMARY_TIMEOUT_MS = 120_000;
 
 /**
  * 是否把原请求的 tools 一起发给摘要模型。
@@ -311,6 +313,15 @@ async function runSummaryRequest(
     note: session.request.note,
   };
 
+  // 摘要请求是 CCH 自己的子请求：客户端断开不应该把它一起取消，
+  // 否则「断开后仍写完缓存供重试复用」这条承诺不成立。
+  // 同时给它自己的超时，并把策略切成单次尝试，避免重试或切到别的供应商。
+  const internalAbort = new AbortController();
+  const previousAbortSignal = session.clientAbortSignal;
+  const timeout = setTimeout(() => internalAbort.abort(), SUMMARY_TIMEOUT_MS);
+  session.setInternalRequestAbortSignal(internalAbort.signal);
+  session.setSingleAttemptMode(true);
+
   try {
     session.request.message = summaryBody;
     session.request.model = String(summaryBody.model ?? "");
@@ -337,6 +348,9 @@ async function runSummaryRequest(
 
     return { text, usage: extractUsage(payload) };
   } finally {
+    clearTimeout(timeout);
+    session.setInternalRequestAbortSignal(previousAbortSignal);
+    session.setSingleAttemptMode(false);
     session.request.message = snapshot.message;
     session.request.model = snapshot.model;
     session.request.buffer = snapshot.buffer;

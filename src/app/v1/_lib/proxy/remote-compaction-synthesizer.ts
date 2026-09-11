@@ -289,7 +289,7 @@ async function produceCompactionResult(
   const compactionId = `cmp_${randomHex(24)}`;
   const responseId = `resp_${randomHex(24)}`;
 
-  await writeCachedCompaction(fingerprint, {
+  const cacheWritten = await writeCachedCompaction(fingerprint, {
     token,
     compactionId,
     responseId,
@@ -300,6 +300,14 @@ async function produceCompactionResult(
     cachedTokens: usage.cached_tokens,
     createdAtSeconds: Math.floor(Date.now() / 1000),
   });
+
+  if (!cacheWritten) {
+    // 只影响重试复用，不影响本次结果；但必须说出来，避免日志声称“已缓存”。
+    logger.warn("[RemoteCompaction] Failed to cache compaction result; retry will recompute", {
+      providerId: provider.id,
+      model: effectiveModel,
+    });
+  }
 
   await finalizeCompactionRecord(session, {
     statusCode: 200,
@@ -407,6 +415,13 @@ async function runSummaryRequest(
     }
 
     return { text, usage: extractUsage(payload) };
+  } catch (error) {
+    // 内部 deadline 触发的 AbortError 在传输层会被包装成 499「客户端中断」，
+    // 这里改抛明确的内部超时，避免日志与请求记录把超时写成客户端断开。
+    if (internalAbort.signal.aborted) {
+      throw new Error("remote_compaction_timeout: 摘要请求超过内部超时");
+    }
+    throw error;
   } finally {
     clearTimeout(timeout);
     session.setInternalRequestAbortSignal(previousAbortSignal);
@@ -618,9 +633,9 @@ function buildStreamingCompactionResponse(
         if (delivery.aborted) {
           logger.warn(
             producedResult
-              ? "[RemoteCompaction] Client disconnected before delivery; result cached for retry"
+              ? "[RemoteCompaction] Client disconnected before delivery; compaction result produced"
               : "[RemoteCompaction] Client disconnected before delivery; no compaction result produced",
-            { deliveryAborted: true, cached: producedResult }
+            { deliveryAborted: true, resultProduced: producedResult }
           );
         }
         delivery.dispose();

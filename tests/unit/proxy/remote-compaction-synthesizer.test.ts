@@ -21,6 +21,7 @@ import {
 import { tryRemoteCompactionSynthesis } from "@/app/v1/_lib/proxy/remote-compaction-synthesizer";
 import type { ProxySession } from "@/app/v1/_lib/proxy/session";
 import { RedisKVStore } from "@/lib/redis/redis-kv-store";
+import { logger } from "@/lib/logger";
 import {
   resolveEndpointPolicy,
   SINGLE_ATTEMPT_ENDPOINT_POLICY,
@@ -546,9 +547,47 @@ describe("remote compaction synthesis", () => {
       expect(session.clientAbortSignal).toBeNull();
       expect(singleAttemptCalls).toEqual([true, false]);
       expect(records.size).toBe(0);
+
+      // 内部超时必须记为 timeout，而不是「客户端中断」
+      const loggedTimeout = (logger.error as unknown as { mock: { calls: unknown[][] } }).mock.calls
+        .flat()
+        .some((arg) => JSON.stringify(arg).includes("remote_compaction_timeout"));
+      expect(loggedTimeout).toBe(true);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("warns instead of claiming a cache hit when the cache write fails", async () => {
+    const failingStore = new RedisKVStore<CachedCompactionResult>({
+      prefix: "test:rc2:",
+      defaultTtlSeconds: 60,
+      redisClient: {
+        status: "ready",
+        setex: async () => {
+          throw new Error("redis down");
+        },
+        get: async () => null,
+        del: async () => 0,
+        eval: async () => null,
+      } as unknown as never,
+    });
+    setRemoteCompactionCacheStoreForTests(failingStore);
+    sendMock.mockResolvedValue(
+      new Response(JSON.stringify({ output: [{ content: [{ text: "summary" }] }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    );
+
+    const { session } = makeSession({ remoteCompactionV2: true });
+    const response = await tryRemoteCompactionSynthesis(session);
+    expect(await response!.text()).toContain("response.completed");
+
+    const warned = (logger.warn as unknown as { mock: { calls: unknown[][] } }).mock.calls
+      .flat()
+      .some((arg) => JSON.stringify(arg).includes("Failed to cache compaction result"));
+    expect(warned).toBe(true);
   });
 
   it("caches the result even when the client disconnected mid-summary", async () => {

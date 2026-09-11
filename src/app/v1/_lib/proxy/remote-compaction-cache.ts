@@ -147,8 +147,8 @@ export async function readCachedCompaction(
 export async function writeCachedCompaction(
   fingerprint: string,
   result: CachedCompactionResult
-): Promise<void> {
-  await resolveStore().set(fingerprint, result);
+): Promise<boolean> {
+  return resolveStore().set(fingerprint, result);
 }
 
 /**

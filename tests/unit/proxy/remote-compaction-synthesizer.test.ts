@@ -10,8 +10,13 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { decodeCompactionSummary } from "@/app/v1/_lib/proxy/remote-compaction";
+import {
+  type CachedCompactionResult,
+  setRemoteCompactionCacheStoreForTests,
+} from "@/app/v1/_lib/proxy/remote-compaction-cache";
 import { tryRemoteCompactionSynthesis } from "@/app/v1/_lib/proxy/remote-compaction-synthesizer";
 import type { ProxySession } from "@/app/v1/_lib/proxy/session";
+import { RedisKVStore } from "@/lib/redis/redis-kv-store";
 
 type FakeSession = {
   session: ProxySession;
@@ -24,6 +29,8 @@ function makeSession(options: { remoteCompactionV2: boolean }): FakeSession {
     message: {
       model: "deepseek-v4-pro",
       instructions: "you are codex",
+      prompt_cache_key: "cache-key-1",
+      tools: [{ type: "function", name: "exec_command" }],
       input: [
         { type: "message", role: "user", content: [{ type: "input_text", text: "do the thing" }] },
         { type: "compaction_trigger" },
@@ -51,6 +58,29 @@ function makeSession(options: { remoteCompactionV2: boolean }): FakeSession {
   return { session, sentBodies };
 }
 
+/** 内存版 Redis KV，用于验证幂等缓存行为。 */
+function installInMemoryCacheStore(): Map<string, string> {
+  const records = new Map<string, string>();
+  const client = {
+    status: "ready",
+    setex: async (key: string, _ttl: number, value: string) => {
+      records.set(key, value);
+      return "OK";
+    },
+    get: async (key: string) => records.get(key) ?? null,
+    del: async () => 1,
+    eval: async () => null,
+  };
+  setRemoteCompactionCacheStoreForTests(
+    new RedisKVStore<CachedCompactionResult>({
+      prefix: "test:rc2:",
+      defaultTtlSeconds: 60,
+      redisClient: client as unknown as never,
+    })
+  );
+  return records;
+}
+
 function sseEvents(body: string): { event: string; data: Record<string, unknown> }[] {
   return body
     .split("\n\n")
@@ -68,6 +98,8 @@ function sseEvents(body: string): { event: string; data: Record<string, unknown>
 describe("remote compaction synthesis", () => {
   beforeEach(() => {
     sendMock.mockReset();
+    setRemoteCompactionCacheStoreForTests(null);
+    installInMemoryCacheStore();
   });
 
   it("does nothing when the provider is not opted in", async () => {
@@ -91,7 +123,9 @@ describe("remote compaction synthesis", () => {
       // The summary call must be non-streaming, tool-less and trigger-free.
       const body = s.request.message as Record<string, unknown>;
       expect(body.stream).toBe(false);
-      expect(body.tools).toEqual([]);
+      // 保留 tools 与 prompt_cache_key 是为了让摘要请求命中同一份前缀缓存
+      expect(body.tools).toEqual([{ type: "function", name: "exec_command" }]);
+      expect(body.prompt_cache_key).toBe("cache-key-1");
       expect(JSON.stringify(body.input)).not.toContain("compaction_trigger");
       return new Response(
         JSON.stringify({
@@ -176,5 +210,64 @@ describe("remote compaction synthesis", () => {
 
     const response = await tryRemoteCompactionSynthesis(session);
     expect(response?.status).toBe(502);
+  });
+
+  it("reuses the cached result when Codex retries the same compaction", async () => {
+    sendMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "resp_upstream",
+          output: [{ type: "message", content: [{ type: "output_text", text: "CHECKPOINT 1" }] }],
+          usage: {
+            input_tokens: 900,
+            output_tokens: 60,
+            total_tokens: 960,
+            input_tokens_details: { cached_tokens: 640 },
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const first = makeSession({ remoteCompactionV2: true });
+    const firstResponse = await tryRemoteCompactionSynthesis(first.session);
+    const firstEvents = sseEvents(await firstResponse!.text());
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(firstEvents).toHaveLength(2);
+
+    // 同一会话、同一历史的重试不再调用上游
+    const retry = makeSession({ remoteCompactionV2: true });
+    const retryResponse = await tryRemoteCompactionSynthesis(retry.session);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+
+    const retryEvents = sseEvents(await retryResponse!.text());
+    expect(retryEvents).toHaveLength(2);
+    expect(retryEvents[0].data.item).toEqual(firstEvents[0].data.item);
+    expect(
+      decodeCompactionSummary(
+        (retryEvents[0].data.item as Record<string, unknown>).encrypted_content
+      ).s
+    ).toBe("CHECKPOINT 1");
+  });
+
+  it("does not reuse a cached result for a different history", async () => {
+    sendMock.mockResolvedValue(
+      new Response(JSON.stringify({ output: [{ content: [{ text: "summary" }] }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    );
+
+    const first = makeSession({ remoteCompactionV2: true });
+    await tryRemoteCompactionSynthesis(first.session);
+
+    const other = makeSession({ remoteCompactionV2: true });
+    (other.session.request.message as Record<string, unknown>).input = [
+      { type: "message", role: "user", content: [{ type: "input_text", text: "different" }] },
+      { type: "compaction_trigger" },
+    ];
+    await tryRemoteCompactionSynthesis(other.session);
+
+    expect(sendMock).toHaveBeenCalledTimes(2);
   });
 });

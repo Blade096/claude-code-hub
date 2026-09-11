@@ -5,7 +5,13 @@ import {
   buildCompactionSummaryInput,
   encodeCompactionSummary,
   isRemoteCompactionV2Request,
+  normalizeInputWithoutTrigger,
 } from "./remote-compaction";
+import {
+  compactionFingerprint,
+  readCachedCompaction,
+  writeCachedCompaction,
+} from "./remote-compaction-cache";
 import { ProxyResponses } from "./responses";
 import type { ProxySession } from "./session";
 
@@ -20,6 +26,16 @@ import type { ProxySession } from "./session";
  */
 
 const SUMMARY_MAX_OUTPUT_TOKENS = 4096;
+
+/**
+ * 是否把原请求的 tools 一起发给摘要模型。
+ *
+ * Responses 的 prompt cache 前缀包含 tools，去掉 tools 会让前缀整体变化，
+ * 大概率拿不到缓存命中；但保留 tools 时模型有极小概率仍然输出工具调用（已用
+ * tool_choice: "none" 抑制）。若某个上游对此不适应，把这里改成 false 即可回到
+ * Codex 本地压缩的形态（只发 instructions + 历史）。
+ */
+const PRESERVE_TOOLS_FOR_PROMPT_CACHE = true;
 
 /**
  * 命中远程压缩替代方案时返回完整的 SSE Response；未命中返回 null，
@@ -42,15 +58,56 @@ export async function tryRemoteCompactionSynthesis(
     return null;
   }
 
+  const startedAt = Date.now();
   const requestedModel = session.getOriginalModel() ?? session.request.model ?? "";
   const effectiveModel = requestedModel
     ? ModelRedirector.getRedirectedModel(requestedModel, provider)
     : requestedModel;
 
+  const { items: historyWithoutTrigger } = normalizeInputWithoutTrigger(requestBody.input);
+  const fingerprint = compactionFingerprint({
+    sessionId: session.sessionId ?? null,
+    providerId: provider.id ?? null,
+    model: effectiveModel,
+    history: historyWithoutTrigger,
+  });
+
+  const cached = await readCachedCompaction(fingerprint);
+  if (cached) {
+    logger.info("[RemoteCompaction] Reusing cached compaction result", {
+      providerId: provider.id,
+      model: cached.model,
+      tokenBytes: cached.token.length,
+    });
+    await finalizeCompactionRecord(session, {
+      statusCode: 200,
+      durationMs: Date.now() - startedAt,
+      usage: {
+        input_tokens: cached.inputTokens,
+        output_tokens: cached.outputTokens,
+        total_tokens: cached.totalTokens,
+        cached_tokens: cached.cachedTokens,
+      },
+      model: cached.model,
+      reused: true,
+    });
+    return buildCompactionSseResponse(
+      cached.token,
+      {
+        input_tokens: cached.inputTokens,
+        output_tokens: cached.outputTokens,
+        total_tokens: cached.totalTokens,
+        cached_tokens: cached.cachedTokens,
+      },
+      { compactionId: cached.compactionId, responseId: cached.responseId }
+    );
+  }
+
   const summaryBody: Record<string, unknown> = {
     model: effectiveModel,
     input: buildCompactionSummaryInput(requestBody.input),
-    tools: [],
+    tools:
+      PRESERVE_TOOLS_FOR_PROMPT_CACHE && Array.isArray(requestBody.tools) ? requestBody.tools : [],
     tool_choice: "none",
     parallel_tool_calls: false,
     stream: false,
@@ -59,6 +116,10 @@ export async function tryRemoteCompactionSynthesis(
   };
   if (typeof requestBody.instructions === "string" && requestBody.instructions.trim()) {
     summaryBody.instructions = requestBody.instructions;
+  }
+  // 复用原请求的 prompt cache key，尽量命中同一个前缀缓存分片。
+  if (typeof requestBody.prompt_cache_key === "string" && requestBody.prompt_cache_key) {
+    summaryBody.prompt_cache_key = requestBody.prompt_cache_key;
   }
 
   logger.info("[RemoteCompaction] Synthesizing compaction summary", {
@@ -75,21 +136,48 @@ export async function tryRemoteCompactionSynthesis(
     summaryText = result.text;
     usage = result.usage;
   } catch (error) {
+    const message = error instanceof Error ? error.message : "摘要生成失败";
     logger.error("[RemoteCompaction] Summary request failed", {
       providerId: provider.id,
       providerName: provider.name,
-      error: error instanceof Error ? error.message : String(error),
+      error: message,
     });
-    return ProxyResponses.buildError(
-      502,
-      `远程压缩失败：${error instanceof Error ? error.message : "摘要生成失败"}`
-    );
+    await finalizeCompactionRecord(session, {
+      statusCode: 502,
+      durationMs: Date.now() - startedAt,
+      errorMessage: message,
+      model: effectiveModel,
+    });
+    return ProxyResponses.buildError(502, `远程压缩失败：${message}`);
   }
 
   const token = encodeCompactionSummary({
     summary: summaryText,
     model: effectiveModel || null,
     createdAtSeconds: Math.floor(Date.now() / 1000),
+  });
+
+  // id 先固定下来，重试命中缓存时才能回放完全一致的事件。
+  const compactionId = `cmp_${randomHex(24)}`;
+  const responseId = `resp_${randomHex(24)}`;
+
+  await writeCachedCompaction(fingerprint, {
+    token,
+    compactionId,
+    responseId,
+    model: effectiveModel || null,
+    inputTokens: usage.input_tokens,
+    outputTokens: usage.output_tokens,
+    totalTokens: usage.total_tokens,
+    cachedTokens: usage.cached_tokens,
+    createdAtSeconds: Math.floor(Date.now() / 1000),
+  });
+
+  await finalizeCompactionRecord(session, {
+    statusCode: 200,
+    durationMs: Date.now() - startedAt,
+    usage,
+    model: effectiveModel,
   });
 
   logger.info("[RemoteCompaction] Compaction synthesized", {
@@ -100,13 +188,14 @@ export async function tryRemoteCompactionSynthesis(
     usage,
   });
 
-  return buildCompactionSseResponse(token, usage);
+  return buildCompactionSseResponse(token, usage, { compactionId, responseId });
 }
 
 type CompactionUsage = {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  cached_tokens: number;
 };
 
 async function runSummaryRequest(
@@ -195,14 +284,74 @@ function extractSummaryText(payload: unknown): string | null {
 function extractUsage(payload: unknown): CompactionUsage {
   const record = asRecord(payload);
   const usage = record ? asRecord(record.usage) : null;
-  const inputTokens = numberOrZero(usage?.input_tokens);
-  const outputTokens = numberOrZero(usage?.output_tokens);
+  const inputTokens = numberOrZero(usage?.input_tokens) || numberOrZero(usage?.prompt_tokens);
+  const outputTokens = numberOrZero(usage?.output_tokens) || numberOrZero(usage?.completion_tokens);
   const totalTokens = numberOrZero(usage?.total_tokens) || inputTokens + outputTokens;
   return {
     input_tokens: inputTokens,
     output_tokens: outputTokens,
     total_tokens: totalTokens,
+    cached_tokens: extractCachedTokens(usage),
   };
+}
+
+/**
+ * 上游对缓存命中的字段命名并不统一，这里把常见的几种都读一遍，
+ * 便于在日志和使用记录里确认压缩请求到底有没有吃到缓存。
+ */
+function extractCachedTokens(usage: Record<string, unknown> | null): number {
+  if (!usage) return 0;
+  const details = asRecord(usage.input_tokens_details) ?? asRecord(usage.prompt_tokens_details);
+  return (
+    numberOrZero(usage.prompt_cache_hit_tokens) ||
+    numberOrZero(usage.cache_read_input_tokens) ||
+    numberOrZero(details?.cached_tokens) ||
+    0
+  );
+}
+
+/**
+ * 压缩请求在 guard pipeline 里已经写入了 message_request 记录，但它的结算路径
+ * 由响应处理器负责，而我们在那之前就返回了。这里手动收敛这条记录，避免它在后台
+ * 一直显示为处理中，同时把摘要调用的 token 用量记录下来。
+ */
+async function finalizeCompactionRecord(
+  session: ProxySession,
+  details: {
+    statusCode: number;
+    durationMs: number;
+    usage?: CompactionUsage;
+    errorMessage?: string;
+    model: string | null;
+    reused?: boolean;
+  }
+): Promise<void> {
+  const messageId = session.messageContext?.id;
+  if (messageId == null) {
+    return;
+  }
+
+  try {
+    const { updateMessageRequestDetails, updateMessageRequestDuration } = await import(
+      "@/repository/message"
+    );
+    await updateMessageRequestDetails(messageId, {
+      statusCode: details.statusCode,
+      inputTokens: details.usage?.input_tokens,
+      outputTokens: details.usage?.output_tokens,
+      cacheReadInputTokens: details.usage?.cached_tokens,
+      model: details.model ?? undefined,
+      providerId: session.provider?.id,
+      errorMessage: details.errorMessage,
+    });
+    await updateMessageRequestDuration(messageId, details.durationMs);
+  } catch (error) {
+    logger.warn("[RemoteCompaction] Failed to finalize message request record", {
+      messageId,
+      reused: details.reused ?? false,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 function numberOrZero(value: unknown): number {
@@ -215,9 +364,13 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function buildCompactionSseResponse(token: string, usage: CompactionUsage): Response {
-  const compactionId = `cmp_${randomHex(24)}`;
-  const responseId = `resp_${randomHex(24)}`;
+function buildCompactionSseResponse(
+  token: string,
+  usage: CompactionUsage,
+  ids?: { compactionId: string; responseId: string }
+): Response {
+  const compactionId = ids?.compactionId ?? `cmp_${randomHex(24)}`;
+  const responseId = ids?.responseId ?? `resp_${randomHex(24)}`;
 
   const events = [
     {

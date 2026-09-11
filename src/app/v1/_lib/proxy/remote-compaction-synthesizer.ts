@@ -17,7 +17,6 @@ import {
   waitForCachedCompaction,
   writeCachedCompaction,
 } from "./remote-compaction-cache";
-import { ProxyResponses } from "./responses";
 import type { ProxySession } from "./session";
 
 /**
@@ -82,6 +81,50 @@ export async function tryRemoteCompactionSynthesis(
     return replayCachedCompaction(session, cached, startedAt);
   }
 
+  // 摘要通常要十几秒。如果等它跑完再返回响应头，中间层（Cloudflare 一类对
+  // 「无响应体」的超时）会掐掉连接，客户端只能重试。先把 SSE 建立起来，
+  // 摘要期间用心跳注释保活，完成后再补协议事件。
+  return buildStreamingCompactionResponse(() =>
+    produceCompactionResult(session, {
+      requestBody,
+      provider,
+      effectiveModel,
+      requestedModel,
+      fingerprint,
+      startedAt,
+    })
+  );
+}
+
+type CompactionOutcome =
+  | {
+      ok: true;
+      token: string;
+      compactionId: string;
+      responseId: string;
+      usage: CompactionUsage;
+    }
+  | { ok: false; message: string };
+
+type CompactionProductionInputs = {
+  requestBody: Record<string, unknown>;
+  provider: NonNullable<ProxySession["provider"]>;
+  effectiveModel: string;
+  requestedModel: string;
+  fingerprint: string;
+  startedAt: number;
+};
+
+/**
+ * 生成或复用一份压缩结果。只负责业务结果，不负责协议组帧，
+ * 失败以 outcome 返回，由 SSE 层决定怎么告诉客户端。
+ */
+async function produceCompactionResult(
+  session: ProxySession,
+  inputs: CompactionProductionInputs
+): Promise<CompactionOutcome> {
+  const { requestBody, provider, effectiveModel, requestedModel, fingerprint, startedAt } = inputs;
+
   // 同一份摘要可能被重复请求：断流后客户端最多重发两次，第一次也可能仍在飞行中。
   // 拿到锁的请求负责生成，没拿到的先等一会儿已有结果，等不到再自己算，避免长时间阻塞。
   const lockOwner = await acquireCompactionLock(fingerprint);
@@ -93,7 +136,26 @@ export async function tryRemoteCompactionSynthesis(
         providerId: provider.id,
         model: reused.model,
       });
-      return replayCachedCompaction(session, reused, startedAt);
+      const reusedUsage: CompactionUsage = {
+        input_tokens: reused.inputTokens,
+        output_tokens: reused.outputTokens,
+        total_tokens: reused.totalTokens,
+        cached_tokens: reused.cachedTokens,
+      };
+      await finalizeCompactionRecord(session, {
+        statusCode: 200,
+        durationMs: Date.now() - startedAt,
+        usage: reusedUsage,
+        model: reused.model,
+        reused: true,
+      });
+      return {
+        ok: true,
+        token: reused.token,
+        compactionId: reused.compactionId,
+        responseId: reused.responseId,
+        usage: reusedUsage,
+      };
     }
     logger.warn("[RemoteCompaction] Compaction lock held and no result yet; computing anyway", {
       providerId: provider.id,
@@ -154,7 +216,7 @@ export async function tryRemoteCompactionSynthesis(
       model: effectiveModel,
     });
     await releaseLock();
-    return ProxyResponses.buildError(502, `远程压缩失败：${message}`);
+    return { ok: false, message };
   }
 
   const token = encodeCompactionSummary({
@@ -195,7 +257,7 @@ export async function tryRemoteCompactionSynthesis(
   });
 
   await releaseLock();
-  return buildCompactionSseResponse(token, usage, { compactionId, responseId });
+  return { ok: true, token, compactionId, responseId, usage };
 }
 
 /** 复用缓存或并发请求产出的结果：收敛使用记录并按协议回放同一份事件。 */
@@ -398,14 +460,97 @@ function numberOrZero(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-function buildCompactionSseResponse(
-  token: string,
-  usage: CompactionUsage,
-  ids?: { compactionId: string; responseId: string }
-): Response {
-  const compactionId = ids?.compactionId ?? `cmp_${randomHex(24)}`;
-  const responseId = ids?.responseId ?? `resp_${randomHex(24)}`;
+const SSE_HEADERS = {
+  "Content-Type": "text/event-stream; charset=utf-8",
+  "Cache-Control": "no-cache",
+  Connection: "keep-alive",
+};
 
+/** 摘要期间发给客户端的 SSE 注释帧，只用于保活，不参与事件计数。 */
+const SSE_HEARTBEAT = ": cch-remote-compaction-heartbeat\n\n";
+const HEARTBEAT_INTERVAL_MS = 10_000;
+
+function formatSseEvent(event: string, data: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+/**
+ * 先建立 SSE，摘要期间持续发心跳，拿到结果后再补协议事件。
+ * 失败时发 response.failed（流已建立，不能再改回 JSON 错误）。
+ */
+function buildStreamingCompactionResponse(produce: () => Promise<CompactionOutcome>): Response {
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let closed = false;
+      const send = (chunk: string) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(chunk));
+        } catch {
+          // 客户端断开或流被取消，后续结果仍会写完缓存供重试复用。
+          closed = true;
+        }
+      };
+
+      send(SSE_HEARTBEAT);
+      const heartbeat = setInterval(() => send(SSE_HEARTBEAT), HEARTBEAT_INTERVAL_MS);
+
+      try {
+        const outcome = await produce();
+        send(
+          outcome.ok
+            ? formatCompactionEvents(outcome)
+            : formatSseEvent("response.failed", {
+                type: "response.failed",
+                response: {
+                  status: "failed",
+                  error: {
+                    code: "remote_compaction_failed",
+                    message: `远程压缩失败：${outcome.message}`,
+                  },
+                },
+              })
+        );
+      } catch (error) {
+        send(
+          formatSseEvent("response.failed", {
+            type: "response.failed",
+            response: {
+              status: "failed",
+              error: {
+                code: "remote_compaction_failed",
+                message: `远程压缩失败：${error instanceof Error ? error.message : "未知错误"}`,
+              },
+            },
+          })
+        );
+      } finally {
+        clearInterval(heartbeat);
+        try {
+          controller.close();
+        } catch {
+          /* 流已关闭 */
+        }
+        closed = true;
+      }
+    },
+    cancel() {
+      // 客户端断开后不取消摘要：让它跑完写进缓存，重试即可命中。
+    },
+  });
+
+  return new Response(stream, { status: 200, headers: SSE_HEADERS });
+}
+
+function formatCompactionEvents(outcome: {
+  token: string;
+  compactionId: string;
+  responseId: string;
+  usage: CompactionUsage;
+}): string {
+  const { token, compactionId, responseId, usage } = outcome;
   const events = [
     {
       event: "response.output_item.done",
@@ -437,18 +582,21 @@ function buildCompactionSseResponse(
     },
   ];
 
-  const body = events
-    .map((item) => `event: ${item.event}\ndata: ${JSON.stringify(item.data)}\n\n`)
-    .join("");
+  return events.map((item) => formatSseEvent(item.event, item.data)).join("");
+}
 
-  return new Response(body, {
-    status: 200,
-    headers: {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    },
+function buildCompactionSseResponse(
+  token: string,
+  usage: CompactionUsage,
+  ids?: { compactionId: string; responseId: string }
+): Response {
+  const body = formatCompactionEvents({
+    token,
+    compactionId: ids?.compactionId ?? `cmp_${randomHex(24)}`,
+    responseId: ids?.responseId ?? `resp_${randomHex(24)}`,
+    usage,
   });
+  return new Response(body, { status: 200, headers: SSE_HEADERS });
 }
 
 function randomHex(bytes: number): string {

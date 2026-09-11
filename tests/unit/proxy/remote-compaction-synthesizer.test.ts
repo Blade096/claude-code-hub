@@ -117,17 +117,20 @@ function installLock(options: { acquire?: boolean }): { calls: LockCall[]; owner
 }
 
 function sseEvents(body: string): { event: string; data: Record<string, unknown> }[] {
-  return body
-    .split("\n\n")
-    .filter((chunk) => chunk.trim().length > 0)
-    .map((chunk) => {
-      const eventLine = chunk.split("\n").find((line) => line.startsWith("event: ")) ?? "event: ";
-      const dataLine = chunk.split("\n").find((line) => line.startsWith("data: ")) ?? "data: {}";
-      return {
-        event: eventLine.slice("event: ".length),
-        data: JSON.parse(dataLine.slice("data: ".length)) as Record<string, unknown>,
-      };
-    });
+  return (
+    body
+      .split("\n\n")
+      // 心跳是注释帧（以 ":" 开头），不是事件，必须跳过
+      .filter((chunk) => chunk.includes("data: "))
+      .map((chunk) => {
+        const eventLine = chunk.split("\n").find((line) => line.startsWith("event: ")) ?? "event: ";
+        const dataLine = chunk.split("\n").find((line) => line.startsWith("data: ")) ?? "data: {}";
+        return {
+          event: eventLine.slice("event: ".length),
+          data: JSON.parse(dataLine.slice("data: ".length)) as Record<string, unknown>,
+        };
+      })
+  );
 }
 
 describe("remote compaction synthesis", () => {
@@ -232,8 +235,11 @@ describe("remote compaction synthesis", () => {
     );
 
     const response = await tryRemoteCompactionSynthesis(session);
-    expect(response?.status).toBe(502);
-    expect(await response!.text()).toContain("远程压缩失败");
+    expect(response?.status).toBe(200);
+
+    const events = sseEvents(await response!.text());
+    expect(events.at(-1)?.event).toBe("response.failed");
+    expect(JSON.stringify(events.at(-1)?.data)).toContain("远程压缩失败");
   });
 
   it("fails when the upstream returns no usable text", async () => {
@@ -246,7 +252,52 @@ describe("remote compaction synthesis", () => {
     );
 
     const response = await tryRemoteCompactionSynthesis(session);
-    expect(response?.status).toBe(502);
+    const events = sseEvents(await response!.text());
+    expect(events.at(-1)?.event).toBe("response.failed");
+  });
+
+  it("opens the SSE stream with a heartbeat before the summary completes", async () => {
+    let release: ((value: Response) => void) | undefined;
+    sendMock.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          release = resolve;
+        })
+    );
+
+    const { session } = makeSession({ remoteCompactionV2: true });
+    const response = await tryRemoteCompactionSynthesis(session);
+    expect(response?.status).toBe(200);
+
+    const reader = response!.body!.getReader();
+    const decoder = new TextDecoder();
+    const firstChunk = decoder.decode((await reader.read()).value);
+
+    // 摘要还没返回，响应体已经建立并且先发了一个心跳注释帧
+    expect(firstChunk).toContain("cch-remote-compaction-heartbeat");
+    expect(firstChunk).not.toContain("response.completed");
+
+    release?.(
+      new Response(
+        JSON.stringify({ output: [{ content: [{ text: "summary after heartbeat" }] }] }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    let rest = "";
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      rest += decoder.decode(chunk.value);
+    }
+    const events = sseEvents(rest);
+    expect(events.map((item) => item.event)).toEqual([
+      "response.output_item.done",
+      "response.completed",
+    ]);
+    expect(
+      decodeCompactionSummary((events[0].data.item as Record<string, unknown>).encrypted_content).s
+    ).toBe("summary after heartbeat");
   });
 
   it("reuses the cached result when Codex retries the same compaction", async () => {
@@ -303,7 +354,8 @@ describe("remote compaction synthesis", () => {
       { type: "message", role: "user", content: [{ type: "input_text", text: "different" }] },
       { type: "compaction_trigger" },
     ];
-    await tryRemoteCompactionSynthesis(other.session);
+    const otherResponse = await tryRemoteCompactionSynthesis(other.session);
+    await otherResponse!.text();
 
     expect(sendMock).toHaveBeenCalledTimes(2);
   });
@@ -318,7 +370,8 @@ describe("remote compaction synthesis", () => {
 
     const lock = installLock({});
     const { session } = makeSession({ remoteCompactionV2: true });
-    await tryRemoteCompactionSynthesis(session);
+    const response = await tryRemoteCompactionSynthesis(session);
+    await response!.text();
 
     expect(lock.calls).toEqual(["acquire", "release"]);
     // 释放必须带同一个 owner token，否则会误删别人的锁
@@ -381,9 +434,10 @@ describe("remote compaction synthesis", () => {
     const lock = installLock({ acquire: false });
     const { session } = makeSession({ remoteCompactionV2: true });
     const response = await tryRemoteCompactionSynthesis(session);
+    const body = await response!.text();
 
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(await response!.text()).toContain("response.completed");
+    expect(body).toContain("response.completed");
     // 没抢到锁就不该释放别人的锁
     expect(lock.calls).toEqual(["acquire"]);
   });

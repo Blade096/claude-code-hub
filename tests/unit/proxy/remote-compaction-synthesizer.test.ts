@@ -515,11 +515,21 @@ describe("remote compaction synthesis", () => {
   it("aborts the internal summary signal when the deadline expires", async () => {
     vi.useFakeTimers();
     try {
-      const { session, abortSignals } = makeSession({ remoteCompactionV2: true });
-      // 上游永不返回，只能靠自身超时兜住
-      sendMock.mockImplementation(() => new Promise<Response>(() => {}));
+      const records = installInMemoryCacheStore();
+      const { session, abortSignals, singleAttemptCalls } = makeSession({
+        remoteCompactionV2: true,
+      });
+      // 上游只在自身 signal 被 abort 时收敛，用来说明超时真的会终止请求
+      sendMock.mockImplementation(
+        (s: ProxySession) =>
+          new Promise<Response>((_resolve, reject) => {
+            s.clientAbortSignal?.addEventListener("abort", () =>
+              reject(new Error("summary aborted"))
+            );
+          })
+      );
 
-      void tryRemoteCompactionSynthesis(session);
+      const responsePromise = tryRemoteCompactionSynthesis(session);
       await vi.advanceTimersByTimeAsync(0);
 
       expect(abortSignals.length).toBeGreaterThan(0);
@@ -528,6 +538,14 @@ describe("remote compaction synthesis", () => {
 
       await vi.advanceTimersByTimeAsync(120_000);
       expect(internalSignal.aborted).toBe(true);
+
+      // 流必须收敛：发 response.failed、关闭、恢复状态、不写缓存
+      const response = await responsePromise;
+      const body = await response!.text();
+      expect(body).toContain("response.failed");
+      expect(session.clientAbortSignal).toBeNull();
+      expect(singleAttemptCalls).toEqual([true, false]);
+      expect(records.size).toBe(0);
     } finally {
       vi.useRealTimers();
     }

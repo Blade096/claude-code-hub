@@ -47,9 +47,9 @@ describe("proxy error i18n boundary", () => {
     );
   });
 
-  it("falls back to the compaction message for unknown codes", () => {
-    expect(translateProxyError("something_else", "en")).toBe(
-      "Remote compaction failed. Please try again later."
-    );
+  it("keeps the error code table closed", () => {
+    // 错误码类型只允许登记过的码，新增文案必须一起登记，不会静默回退到别的错误
+    const codes: string[] = ["remote_compaction_failed"];
+    expect(codes.every((code) => translateProxyError(code as never, "en").length > 0)).toBe(true);
   });
 });

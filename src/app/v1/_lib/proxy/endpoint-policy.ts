@@ -9,6 +9,11 @@ export interface EndpointPolicy {
   readonly guardPreset: EndpointGuardPreset;
   readonly allowRetry: boolean;
   readonly allowProviderSwitch: boolean;
+  /**
+   * 是否允许同一次请求内的传输层回退：WS→HTTP、HTTP/2→HTTP/1.1、代理→直连。
+   * 这些回退会重新发送同一份请求体，因此内部单次尝试子请求必须关掉。
+   */
+  readonly allowTransportFallback?: boolean;
   readonly allowRawCrossProviderFallback: boolean;
   readonly allowCircuitBreakerAccounting: boolean;
   readonly trackConcurrentRequests: boolean;
@@ -24,6 +29,7 @@ const DEFAULT_ENDPOINT_POLICY: EndpointPolicy = Object.freeze({
   guardPreset: "chat",
   allowRetry: true,
   allowProviderSwitch: true,
+  allowTransportFallback: true,
   allowRawCrossProviderFallback: false,
   allowCircuitBreakerAccounting: true,
   trackConcurrentRequests: true,
@@ -39,6 +45,7 @@ const RAW_PASSTHROUGH_ENDPOINT_POLICY: EndpointPolicy = Object.freeze({
   guardPreset: "raw_passthrough",
   allowRetry: false,
   allowProviderSwitch: false,
+  allowTransportFallback: true,
   allowRawCrossProviderFallback: true,
   allowCircuitBreakerAccounting: false,
   trackConcurrentRequests: false,
@@ -58,6 +65,7 @@ export const SINGLE_ATTEMPT_ENDPOINT_POLICY: EndpointPolicy = Object.freeze({
   ...DEFAULT_ENDPOINT_POLICY,
   allowRetry: false,
   allowProviderSwitch: false,
+  allowTransportFallback: false,
 });
 
 const rawPassthroughEndpointPathSet = new Set<string>([

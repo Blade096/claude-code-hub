@@ -71,6 +71,9 @@ export async function tryRemoteCompactionSynthesis(
     ? ModelRedirector.getRedirectedModel(requestedModel, provider)
     : requestedModel;
 
+  // 客户端可能在生产、结算或投递的任意阶段断开，所以监听整个流程而不是只采样一次。
+  const delivery = trackClientDelivery(session.clientAbortSignal);
+
   const { items: historyWithoutTrigger } = normalizeInputWithoutTrigger(requestBody.input);
   const fingerprint = compactionFingerprint({
     sessionId: session.sessionId ?? null,
@@ -102,9 +105,40 @@ export async function tryRemoteCompactionSynthesis(
         requestedModel,
         fingerprint,
         startedAt,
+        delivery,
       }),
-    failureMessage
+    failureMessage,
+    delivery
   );
+}
+
+type DeliveryTracker = {
+  readonly aborted: boolean;
+  dispose(): void;
+};
+
+/**
+ * 跟踪客户端是否在压缩流程期间断开。
+ * 断开后摘要照常完成并写缓存，但必须把这件事记下来（deliveryAborted）。
+ */
+function trackClientDelivery(signal: AbortSignal | null): DeliveryTracker {
+  let aborted = signal?.aborted === true;
+  const onAbort = () => {
+    aborted = true;
+  };
+
+  if (signal && !aborted) {
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  return {
+    get aborted() {
+      return aborted;
+    },
+    dispose() {
+      signal?.removeEventListener("abort", onAbort);
+    },
+  };
 }
 
 type CompactionOutcome =
@@ -124,6 +158,7 @@ type CompactionProductionInputs = {
   requestedModel: string;
   fingerprint: string;
   startedAt: number;
+  delivery: DeliveryTracker;
 };
 
 /**
@@ -134,7 +169,15 @@ async function produceCompactionResult(
   session: ProxySession,
   inputs: CompactionProductionInputs
 ): Promise<CompactionOutcome> {
-  const { requestBody, provider, effectiveModel, requestedModel, fingerprint, startedAt } = inputs;
+  const {
+    requestBody,
+    provider,
+    effectiveModel,
+    requestedModel,
+    fingerprint,
+    startedAt,
+    delivery,
+  } = inputs;
 
   // 同一份摘要可能被重复请求：断流后客户端最多重发两次，第一次也可能仍在飞行中。
   // 拿到锁的请求负责生成，没拿到的先等一会儿已有结果，等不到再自己算，避免长时间阻塞。
@@ -209,12 +252,10 @@ async function produceCompactionResult(
 
   let summaryText: string;
   let usage: CompactionUsage;
-  let deliveryAborted = false;
   try {
     const result = await runSummaryRequest(session, summaryBody);
     summaryText = result.text;
     usage = result.usage;
-    deliveryAborted = result.deliveryAborted;
   } catch (error) {
     const message = error instanceof Error ? error.message : "摘要生成失败";
     logger.error("[RemoteCompaction] Summary request failed", {
@@ -267,16 +308,8 @@ async function produceCompactionResult(
     summaryChars: summaryText.length,
     tokenBytes: token.length,
     usage,
-    deliveryAborted,
+    deliveryAborted: delivery.aborted,
   });
-
-  if (deliveryAborted) {
-    logger.warn("[RemoteCompaction] Client disconnected before delivery; result cached for retry", {
-      providerId: provider.id,
-      model: effectiveModel,
-      deliveryAborted: true,
-    });
-  }
 
   await releaseLock();
   return { ok: true, token, compactionId, responseId, usage };
@@ -325,7 +358,7 @@ type CompactionUsage = {
 async function runSummaryRequest(
   session: ProxySession,
   summaryBody: Record<string, unknown>
-): Promise<{ text: string; usage: CompactionUsage; deliveryAborted: boolean }> {
+): Promise<{ text: string; usage: CompactionUsage }> {
   const snapshot = {
     message: session.request.message,
     model: session.request.model,
@@ -367,12 +400,7 @@ async function runSummaryRequest(
       throw new Error("上游没有返回可用的摘要文本");
     }
 
-    // 摘要期间客户端可能已经断开：结果照样算完并写缓存，但要把这件事记下来。
-    return {
-      text,
-      usage: extractUsage(payload),
-      deliveryAborted: previousAbortSignal?.aborted === true,
-    };
+    return { text, usage: extractUsage(payload) };
   } finally {
     clearTimeout(timeout);
     session.setInternalRequestAbortSignal(previousAbortSignal);
@@ -520,7 +548,8 @@ function formatSseEvent(event: string, data: unknown): string {
  */
 function buildStreamingCompactionResponse(
   produce: () => Promise<CompactionOutcome>,
-  failureMessage: string
+  failureMessage: string,
+  delivery: DeliveryTracker
 ): Response {
   const encoder = new TextEncoder();
 
@@ -556,7 +585,7 @@ function buildStreamingCompactionResponse(
                 },
               })
         );
-      } catch (error) {
+      } catch {
         send(
           formatSseEvent("response.failed", {
             type: "response.failed",
@@ -577,6 +606,14 @@ function buildStreamingCompactionResponse(
           /* 流已关闭 */
         }
         closed = true;
+
+        if (delivery.aborted) {
+          logger.warn(
+            "[RemoteCompaction] Client disconnected before delivery; result cached for retry",
+            { deliveryAborted: true }
+          );
+        }
+        delivery.dispose();
       }
     },
     cancel() {

@@ -2305,7 +2305,8 @@ export class ProxyForwarder {
       // 单次尝试策略不允许把完整会话历史交给另一个供应商：策略关闭时直接按
       // 「无可用供应商」处理，走下方统一的失败收尾。
       // 注意保留既有 raw 端点语义：开了跨供应商 fallback 时仍然允许切换。
-      const canSwitchProvider = endpointPolicy.allowProviderSwitch || rawCrossProviderFallbackEnabled;
+      const canSwitchProvider =
+        endpointPolicy.allowProviderSwitch || rawCrossProviderFallbackEnabled;
       const alternativeProvider = canSwitchProvider
         ? await ProxyForwarder.selectAlternative(session, failedProviderIds)
         : null;
@@ -2368,6 +2369,11 @@ export class ProxyForwarder {
       provider.cacheTtlPreference
     );
     session.setCacheTtlResolved(resolvedCacheTtl);
+
+    // 单次尝试策略（内部子请求）下禁止任何传输层回退：WS→HTTP、HTTP/2→HTTP/1.1、
+    // 代理→直连都会重发同一份请求体，等于第二次发送。
+    const canUseTransportFallback =
+      ProxyForwarder.getEndpointPolicy(session).allowTransportFallback ?? true;
 
     // 1M context: GA, no longer needs beta header. Just record if client sent the header.
     const isAnthropicProvider =
@@ -3067,7 +3073,7 @@ export class ProxyForwarder {
           endpointId: responsesWsEndpointId,
         });
 
-        if (wsEligibility.eligible) {
+        if (canUseTransportFallback && wsEligibility.eligible) {
           // Use the *final* outgoing body so the WS frame matches the HTTP
           // path: it has been through filterPrivateParameters() and any
           // request-filter transformations. Falling back to
@@ -3357,8 +3363,7 @@ export class ProxyForwarder {
       // 场景：HTTP/2 连接失败（GOAWAY、RST_STREAM、PROTOCOL_ERROR 等）
       // 策略：透明回退到 HTTP/1.1，不触发供应商切换或熔断器
       // 单次尝试策略下回退也算二次发送，必须关掉。
-      const canRetryHttp2Fallback = ProxyForwarder.getEndpointPolicy(session).allowRetry;
-      if (canRetryHttp2Fallback && enableHttp2 && isHttp2Error(err)) {
+      if (canUseTransportFallback && enableHttp2 && isHttp2Error(err)) {
         const http2CacheKey = proxyConfig?.cacheKey ?? directConnectionCacheKey;
         const http2DispatcherId = proxyConfig?.dispatcherId ?? directConnectionDispatcherId;
         logger.warn("ProxyForwarder: HTTP/2 protocol error detected, falling back to HTTP/1.1", {
@@ -3509,8 +3514,7 @@ export class ProxyForwarder {
 
           // 如果配置了降级到直连，尝试不使用代理
           // 单次尝试策略下不再换连接方式重发。
-          const canFallbackToDirect = ProxyForwarder.getEndpointPolicy(session).allowRetry;
-          if (proxyConfig.fallbackToDirect && canFallbackToDirect) {
+          if (proxyConfig.fallbackToDirect && canUseTransportFallback) {
             logger.warn("ProxyForwarder: Falling back to direct connection", {
               providerId: provider.id,
               providerName: provider.name,

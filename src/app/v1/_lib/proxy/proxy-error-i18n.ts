@@ -16,7 +16,7 @@ const SUPPORTED_LOCALES: ProxyErrorLocale[] = ["zh-CN", "zh-TW", "en", "ja", "ru
 
 const DEFAULT_LOCALE: ProxyErrorLocale = "zh-CN";
 
-type ProxyErrorCode = "remote_compaction_failed";
+export type ProxyErrorCode = "remote_compaction_failed";
 
 const PROXY_ERROR_MESSAGES: Record<ProxyErrorCode, Record<ProxyErrorLocale, string>> = {
   remote_compaction_failed: {
@@ -77,15 +77,13 @@ export function resolveProxyErrorLocale(
   return DEFAULT_LOCALE;
 }
 
-/** 按错误码与请求语言取本地化文案。未知错误码回退到远程压缩文案。 */
+/** 按错误码与请求语言取本地化文案。错误码受类型约束，没有未知码回退。 */
 export function translateProxyError(
-  code: string,
+  code: ProxyErrorCode,
   acceptLanguage: string | null | undefined
 ): string {
   const locale = resolveProxyErrorLocale(acceptLanguage);
-  const table =
-    PROXY_ERROR_MESSAGES[code as ProxyErrorCode] ?? PROXY_ERROR_MESSAGES.remote_compaction_failed;
-  return table[locale];
+  return PROXY_ERROR_MESSAGES[code][locale];
 }
 
 /** 供测试确认语言覆盖范围。 */

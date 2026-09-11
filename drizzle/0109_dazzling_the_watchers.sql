@@ -1,0 +1,1 @@
+ALTER TABLE "providers" ADD COLUMN "remote_compaction_v2" boolean DEFAULT false NOT NULL;

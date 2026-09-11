@@ -1,0 +1,180 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const sendMock = vi.fn();
+
+vi.mock("@/app/v1/_lib/proxy/forwarder", () => ({
+  ProxyForwarder: { send: (...args: unknown[]) => sendMock(...args) },
+}));
+vi.mock("@/lib/logger", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn() },
+}));
+
+import { decodeCompactionSummary } from "@/app/v1/_lib/proxy/remote-compaction";
+import { tryRemoteCompactionSynthesis } from "@/app/v1/_lib/proxy/remote-compaction-synthesizer";
+import type { ProxySession } from "@/app/v1/_lib/proxy/session";
+
+type FakeSession = {
+  session: ProxySession;
+  sentBodies: Record<string, unknown>[];
+};
+
+function makeSession(options: { remoteCompactionV2: boolean }): FakeSession {
+  const sentBodies: Record<string, unknown>[] = [];
+  const request = {
+    message: {
+      model: "deepseek-v4-pro",
+      instructions: "you are codex",
+      input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "do the thing" }] },
+        { type: "compaction_trigger" },
+      ],
+    } as Record<string, unknown>,
+    model: "deepseek-v4-pro",
+    buffer: new ArrayBuffer(0),
+    note: "",
+  };
+
+  const session = {
+    originalFormat: "response",
+    requestUrl: new URL("https://hub.test/v1/responses"),
+    request,
+    provider: {
+      id: 7,
+      name: "deepseek",
+      remoteCompactionV2: options.remoteCompactionV2,
+      modelRedirects: null,
+    },
+    sessionId: "01a08fc2-d8f1-7165-ade4-74a92cbf6f85",
+    getOriginalModel: () => "deepseek-v4-pro",
+  } as unknown as ProxySession;
+
+  return { session, sentBodies };
+}
+
+function sseEvents(body: string): { event: string; data: Record<string, unknown> }[] {
+  return body
+    .split("\n\n")
+    .filter((chunk) => chunk.trim().length > 0)
+    .map((chunk) => {
+      const eventLine = chunk.split("\n").find((line) => line.startsWith("event: ")) ?? "event: ";
+      const dataLine = chunk.split("\n").find((line) => line.startsWith("data: ")) ?? "data: {}";
+      return {
+        event: eventLine.slice("event: ".length),
+        data: JSON.parse(dataLine.slice("data: ".length)) as Record<string, unknown>,
+      };
+    });
+}
+
+describe("remote compaction synthesis", () => {
+  beforeEach(() => {
+    sendMock.mockReset();
+  });
+
+  it("does nothing when the provider is not opted in", async () => {
+    const { session } = makeSession({ remoteCompactionV2: false });
+    await expect(tryRemoteCompactionSynthesis(session)).resolves.toBeNull();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("does nothing for ordinary requests", async () => {
+    const { session } = makeSession({ remoteCompactionV2: true });
+    (session.request.message as Record<string, unknown>).input = [
+      { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+    ];
+    await expect(tryRemoteCompactionSynthesis(session)).resolves.toBeNull();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("emits exactly one compaction item followed by response.completed", async () => {
+    const { session } = makeSession({ remoteCompactionV2: true });
+    sendMock.mockImplementation(async (s: ProxySession) => {
+      // The summary call must be non-streaming, tool-less and trigger-free.
+      const body = s.request.message as Record<string, unknown>;
+      expect(body.stream).toBe(false);
+      expect(body.tools).toEqual([]);
+      expect(JSON.stringify(body.input)).not.toContain("compaction_trigger");
+      return new Response(
+        JSON.stringify({
+          id: "resp_upstream",
+          output: [
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "CHECKPOINT: the thing is half done" }],
+            },
+          ],
+          usage: { input_tokens: 120, output_tokens: 40, total_tokens: 160 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    });
+
+    const response = await tryRemoteCompactionSynthesis(session);
+    expect(response).not.toBeNull();
+    expect(response?.headers.get("content-type")).toContain("text/event-stream");
+
+    const events = sseEvents(await response!.text());
+    expect(events.map((item) => item.event)).toEqual([
+      "response.output_item.done",
+      "response.completed",
+    ]);
+
+    const doneItem = events[0].data.item as Record<string, unknown>;
+    expect(doneItem.type).toBe("compaction");
+    expect(typeof doneItem.id).toBe("string");
+
+    const decoded = decodeCompactionSummary(doneItem.encrypted_content);
+    expect(decoded.s).toBe("CHECKPOINT: the thing is half done");
+    expect(decoded.m).toBe("deepseek-v4-pro");
+
+    const usage = (events[1].data.response as Record<string, unknown>).usage as Record<
+      string,
+      unknown
+    >;
+    expect(usage.input_tokens).toBe(120);
+    expect(usage.output_tokens).toBe(40);
+  });
+
+  it("restores the original session request after the summary call", async () => {
+    const { session } = makeSession({ remoteCompactionV2: true });
+    const originalMessage = session.request.message;
+    const originalBuffer = session.request.buffer;
+
+    sendMock.mockResolvedValue(
+      new Response(JSON.stringify({ output: [{ content: [{ text: "summary" }] }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    );
+
+    await tryRemoteCompactionSynthesis(session);
+
+    expect(session.request.message).toBe(originalMessage);
+    expect(session.request.buffer).toBe(originalBuffer);
+    expect(session.request.model).toBe("deepseek-v4-pro");
+  });
+
+  it("fails loudly when the upstream summary call fails", async () => {
+    const { session } = makeSession({ remoteCompactionV2: true });
+    sendMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: "boom" } }), { status: 500 })
+    );
+
+    const response = await tryRemoteCompactionSynthesis(session);
+    expect(response?.status).toBe(502);
+    expect(await response!.text()).toContain("远程压缩失败");
+  });
+
+  it("fails when the upstream returns no usable text", async () => {
+    const { session } = makeSession({ remoteCompactionV2: true });
+    sendMock.mockResolvedValue(
+      new Response(JSON.stringify({ output: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    );
+
+    const response = await tryRemoteCompactionSynthesis(session);
+    expect(response?.status).toBe(502);
+  });
+});

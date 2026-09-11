@@ -334,6 +334,7 @@ export async function getProviders(): Promise<ProviderDisplay[]> {
         providerVendorId: provider.providerVendorId,
         preserveClientIp: provider.preserveClientIp,
         disableSessionReuse: provider.disableSessionReuse,
+        remoteCompactionV2: provider.remoteCompactionV2,
         modelRedirects: provider.modelRedirects,
         activeTimeStart: provider.activeTimeStart,
         activeTimeEnd: provider.activeTimeEnd,

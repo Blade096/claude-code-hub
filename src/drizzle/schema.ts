@@ -213,6 +213,8 @@ export const providers = pgTable('providers', {
   preserveClientIp: boolean('preserve_client_ip').notNull().default(false),
   // 是否跳过当前供应商的 sticky session 复用
   disableSessionReuse: boolean('disable_session_reuse').notNull().default(false),
+  // 远程压缩替代：该供应商是否由 CCH 代上游合成 Codex 远程压缩摘要
+  remoteCompactionV2: boolean('remote_compaction_v2').notNull().default(false),
 
   // 模型重定向：将请求的模型名称重定向到另一个模型
   modelRedirects: jsonb('model_redirects').$type<

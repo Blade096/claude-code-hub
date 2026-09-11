@@ -206,6 +206,7 @@ export async function createProvider(providerData: CreateProviderData): Promise<
     providerType: providerData.provider_type,
     preserveClientIp: providerData.preserve_client_ip ?? false,
     disableSessionReuse: providerData.disable_session_reuse ?? false,
+    remoteCompactionV2: providerData.remote_compaction_v2 ?? false,
     modelRedirects: normalizeProviderModelRedirectRules(providerData.model_redirects),
     allowedModels: normalizeAllowedModelRules(providerData.allowed_models),
     allowedClients: providerData.allowed_clients ?? [],
@@ -295,6 +296,7 @@ export async function createProvider(providerData: CreateProviderData): Promise<
         providerType: providers.providerType,
         preserveClientIp: providers.preserveClientIp,
         disableSessionReuse: providers.disableSessionReuse,
+        remoteCompactionV2: providers.remoteCompactionV2,
         modelRedirects: providers.modelRedirects,
         allowedModels: providers.allowedModels,
         allowedClients: providers.allowedClients,
@@ -384,6 +386,7 @@ export async function findProviderList(
       providerType: providers.providerType,
       preserveClientIp: providers.preserveClientIp,
       disableSessionReuse: providers.disableSessionReuse,
+      remoteCompactionV2: providers.remoteCompactionV2,
       modelRedirects: providers.modelRedirects,
       allowedModels: providers.allowedModels,
       allowedClients: providers.allowedClients,
@@ -473,6 +476,7 @@ export async function findAllProvidersFresh(): Promise<Provider[]> {
       providerType: providers.providerType,
       preserveClientIp: providers.preserveClientIp,
       disableSessionReuse: providers.disableSessionReuse,
+      remoteCompactionV2: providers.remoteCompactionV2,
       modelRedirects: providers.modelRedirects,
       allowedModels: providers.allowedModels,
       allowedClients: providers.allowedClients,
@@ -566,6 +570,7 @@ export async function findProviderById(id: number): Promise<Provider | null> {
       providerType: providers.providerType,
       preserveClientIp: providers.preserveClientIp,
       disableSessionReuse: providers.disableSessionReuse,
+      remoteCompactionV2: providers.remoteCompactionV2,
       modelRedirects: providers.modelRedirects,
       allowedModels: providers.allowedModels,
       allowedClients: providers.allowedClients,
@@ -653,6 +658,8 @@ export async function updateProvider(
     dbData.preserveClientIp = providerData.preserve_client_ip;
   if (providerData.disable_session_reuse !== undefined)
     dbData.disableSessionReuse = providerData.disable_session_reuse;
+  if (providerData.remote_compaction_v2 !== undefined)
+    dbData.remoteCompactionV2 = providerData.remote_compaction_v2;
   if (providerData.model_redirects !== undefined)
     dbData.modelRedirects = normalizeProviderModelRedirectRules(providerData.model_redirects);
   if (providerData.allowed_models !== undefined)
@@ -817,6 +824,7 @@ export async function updateProvider(
         providerType: providers.providerType,
         preserveClientIp: providers.preserveClientIp,
         disableSessionReuse: providers.disableSessionReuse,
+        remoteCompactionV2: providers.remoteCompactionV2,
         modelRedirects: providers.modelRedirects,
         allowedModels: providers.allowedModels,
         allowedClients: providers.allowedClients,
@@ -1083,6 +1091,7 @@ export interface BatchProviderUpdates {
   // Routing
   preserveClientIp?: boolean;
   disableSessionReuse?: boolean;
+  remoteCompactionV2?: boolean;
   activeTimeStart?: string | null;
   activeTimeEnd?: string | null;
   groupPriorities?: Record<string, number> | null;
@@ -1174,6 +1183,9 @@ export async function updateProvidersBatch(
   }
   if (updates.disableSessionReuse !== undefined) {
     setClauses.disableSessionReuse = updates.disableSessionReuse;
+  }
+  if (updates.remoteCompactionV2 !== undefined) {
+    setClauses.remoteCompactionV2 = updates.remoteCompactionV2;
   }
   if (updates.activeTimeStart !== undefined) {
     setClauses.activeTimeStart = updates.activeTimeStart;

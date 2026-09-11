@@ -49,6 +49,9 @@ export function buildPatchDraftFromFormState(
   if (dirtyFields.has("routing.disableSessionReuse")) {
     draft.disable_session_reuse = { set: state.routing.disableSessionReuse };
   }
+  if (dirtyFields.has("routing.remoteCompactionV2")) {
+    draft.remote_compaction_v2 = { set: state.routing.remoteCompactionV2 };
+  }
   if (dirtyFields.has("routing.activeTimeStart")) {
     if (state.routing.activeTimeStart === null) {
       draft.active_time_start = { clear: true };

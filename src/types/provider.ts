@@ -96,6 +96,7 @@ export type ProviderBatchPatchField =
   | "active_time_end"
   | "preserve_client_ip"
   | "disable_session_reuse"
+  | "remote_compaction_v2"
   | "group_priorities"
   | "cache_ttl_preference"
   | "swap_cache_ttl_billing"
@@ -151,6 +152,7 @@ export interface ProviderBatchPatchDraft {
   active_time_end?: ProviderPatchDraftInput<string>;
   preserve_client_ip?: ProviderPatchDraftInput<boolean>;
   disable_session_reuse?: ProviderPatchDraftInput<boolean>;
+  remote_compaction_v2?: ProviderPatchDraftInput<boolean>;
   group_priorities?: ProviderPatchDraftInput<Record<string, number>>;
   cache_ttl_preference?: ProviderPatchDraftInput<CacheTtlPreference>;
   swap_cache_ttl_billing?: ProviderPatchDraftInput<boolean>;
@@ -207,6 +209,7 @@ export interface ProviderBatchPatch {
   active_time_end: ProviderPatchOperation<string>;
   preserve_client_ip: ProviderPatchOperation<boolean>;
   disable_session_reuse: ProviderPatchOperation<boolean>;
+  remote_compaction_v2: ProviderPatchOperation<boolean>;
   group_priorities: ProviderPatchOperation<Record<string, number>>;
   cache_ttl_preference: ProviderPatchOperation<CacheTtlPreference>;
   swap_cache_ttl_billing: ProviderPatchOperation<boolean>;
@@ -263,6 +266,7 @@ export interface ProviderBatchApplyUpdates {
   active_time_end?: string | null;
   preserve_client_ip?: boolean;
   disable_session_reuse?: boolean;
+  remote_compaction_v2?: boolean;
   group_priorities?: Record<string, number> | null;
   cache_ttl_preference?: CacheTtlPreference | null;
   swap_cache_ttl_billing?: boolean;

@@ -1466,6 +1466,7 @@ const SINGLE_EDIT_PREIMAGE_FIELD_TO_PROVIDER_KEY: Record<string, keyof Provider>
   provider_type: "providerType",
   preserve_client_ip: "preserveClientIp",
   disable_session_reuse: "disableSessionReuse",
+  remote_compaction_v2: "remoteCompactionV2",
   active_time_start: "activeTimeStart",
   active_time_end: "activeTimeEnd",
   model_redirects: "modelRedirects",
@@ -1638,6 +1639,9 @@ function mapApplyUpdatesToRepositoryFormat(
   if (applyUpdates.disable_session_reuse !== undefined) {
     result.disableSessionReuse = applyUpdates.disable_session_reuse;
   }
+  if (applyUpdates.remote_compaction_v2 !== undefined) {
+    result.remoteCompactionV2 = applyUpdates.remote_compaction_v2;
+  }
   if (applyUpdates.active_time_start !== undefined) {
     result.activeTimeStart = applyUpdates.active_time_start;
   }
@@ -1763,6 +1767,7 @@ const PATCH_FIELD_TO_PROVIDER_KEY: Record<ProviderBatchPatchField, keyof Provide
   anthropic_adaptive_thinking: "anthropicAdaptiveThinking",
   preserve_client_ip: "preserveClientIp",
   disable_session_reuse: "disableSessionReuse",
+  remote_compaction_v2: "remoteCompactionV2",
   active_time_start: "activeTimeStart",
   active_time_end: "activeTimeEnd",
   group_priorities: "groupPriorities",

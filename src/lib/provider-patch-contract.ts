@@ -43,6 +43,7 @@ const PATCH_FIELDS: ProviderBatchPatchField[] = [
   "active_time_end",
   "preserve_client_ip",
   "disable_session_reuse",
+  "remote_compaction_v2",
   "group_priorities",
   "cache_ttl_preference",
   "swap_cache_ttl_billing",
@@ -99,6 +100,7 @@ const CLEARABLE_FIELDS: Record<ProviderBatchPatchField, boolean> = {
   active_time_end: true,
   preserve_client_ip: false,
   disable_session_reuse: false,
+  remote_compaction_v2: false,
   group_priorities: true,
   cache_ttl_preference: true,
   swap_cache_ttl_billing: false,
@@ -213,6 +215,7 @@ function isValidSetValue(field: ProviderBatchPatchField, value: unknown): boolea
     case "is_enabled":
     case "preserve_client_ip":
     case "disable_session_reuse":
+    case "remote_compaction_v2":
     case "swap_cache_ttl_billing":
     case "proxy_fallback_to_direct":
       return typeof value === "boolean";
@@ -472,6 +475,12 @@ export function normalizeProviderBatchPatchDraft(
   );
   if (!disableSessionReuse.ok) return disableSessionReuse;
 
+  const remoteCompactionV2 = normalizePatchField(
+    "remote_compaction_v2",
+    typedDraft.remote_compaction_v2
+  );
+  if (!remoteCompactionV2.ok) return remoteCompactionV2;
+
   const groupPriorities = normalizePatchField("group_priorities", typedDraft.group_priorities);
   if (!groupPriorities.ok) return groupPriorities;
 
@@ -654,6 +663,7 @@ export function normalizeProviderBatchPatchDraft(
       active_time_end: activeTimeEnd.data,
       preserve_client_ip: preserveClientIp.data,
       disable_session_reuse: disableSessionReuse.data,
+      remote_compaction_v2: remoteCompactionV2.data,
       group_priorities: groupPriorities.data,
       cache_ttl_preference: cacheTtlPref.data,
       swap_cache_ttl_billing: swapCacheTtlBilling.data,

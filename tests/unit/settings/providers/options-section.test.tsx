@@ -97,6 +97,7 @@ function createMockState(
       groupTag: [],
       preserveClientIp: false,
       disableSessionReuse: false,
+      remoteCompactionV2: false,
       modelRedirects: {},
       allowedModels: [],
       allowedClients: [],
@@ -238,6 +239,14 @@ describe("OptionsSection", () => {
       const { unmount } = renderSection();
 
       expect(document.getElementById("disable-session-reuse")).toBeTruthy();
+
+      unmount();
+    });
+
+    it("renders remoteCompactionV2 toggle", () => {
+      const { unmount } = renderSection();
+
+      expect(document.getElementById("remote-compaction-v2")).toBeTruthy();
 
       unmount();
     });
@@ -506,7 +515,7 @@ describe("OptionsSection", () => {
         container.querySelectorAll('[data-testid="switch"]')
       ) as HTMLButtonElement[];
 
-      expect(switches).toHaveLength(4);
+      expect(switches).toHaveLength(5);
       for (const toggle of switches) {
         expect(toggle.hasAttribute("disabled")).toBe(true);
       }

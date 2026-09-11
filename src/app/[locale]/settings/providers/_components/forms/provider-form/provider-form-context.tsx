@@ -78,6 +78,7 @@ const ACTION_TO_FIELD_PATH: Partial<Record<ProviderFormActionWith5hResetMode["ty
   SET_GROUP_TAG: "routing.groupTag",
   SET_PRESERVE_CLIENT_IP: "routing.preserveClientIp",
   SET_DISABLE_SESSION_REUSE: "routing.disableSessionReuse",
+  SET_REMOTE_COMPACTION_V2: "routing.remoteCompactionV2",
   SET_MODEL_REDIRECTS: "routing.modelRedirects",
   SET_ALLOWED_MODELS: "routing.allowedModels",
   SET_ALLOWED_CLIENTS: "routing.allowedClients",
@@ -159,6 +160,10 @@ export function createInitialState(
         disableSessionReuse:
           analysis.routing.disableSessionReuse.status === "uniform"
             ? analysis.routing.disableSessionReuse.value
+            : false,
+        remoteCompactionV2:
+          analysis.routing.remoteCompactionV2.status === "uniform"
+            ? analysis.routing.remoteCompactionV2.value
             : false,
         modelRedirects:
           analysis.routing.modelRedirects.status === "uniform"
@@ -351,6 +356,7 @@ export function createInitialState(
         groupTag: [],
         preserveClientIp: false,
         disableSessionReuse: false,
+        remoteCompactionV2: false,
         modelRedirects: [],
         allowedModels: [],
         allowedClients: [],
@@ -429,6 +435,7 @@ export function createInitialState(
       groupTag: parseProviderGroups(sourceProvider?.groupTag),
       preserveClientIp: sourceProvider?.preserveClientIp ?? false,
       disableSessionReuse: sourceProvider?.disableSessionReuse ?? false,
+      remoteCompactionV2: sourceProvider?.remoteCompactionV2 ?? false,
       modelRedirects: normalizeProviderModelRedirectRules(sourceProvider?.modelRedirects) ?? [],
       allowedModels: normalizeAllowedModelRules(sourceProvider?.allowedModels) ?? [],
       allowedClients: sourceProvider?.allowedClients ?? [],
@@ -536,6 +543,8 @@ export function providerFormReducer(
       return { ...state, routing: { ...state.routing, preserveClientIp: action.payload } };
     case "SET_DISABLE_SESSION_REUSE":
       return { ...state, routing: { ...state.routing, disableSessionReuse: action.payload } };
+    case "SET_REMOTE_COMPACTION_V2":
+      return { ...state, routing: { ...state.routing, remoteCompactionV2: action.payload } };
     case "SET_MODEL_REDIRECTS":
       return { ...state, routing: { ...state.routing, modelRedirects: action.payload } };
     case "SET_ALLOWED_MODELS":

@@ -390,6 +390,10 @@
       "label": "Skip session reuse",
       "desc": "When enabled, the next request will ignore this provider's sticky binding and rerun priority and health checks. Useful when a cheap higher-priority provider should be retried as soon as it recovers."
     },
+    "remoteCompactionV2": {
+      "label": "Remote compaction fallback (Codex)",
+      "desc": "When enabled, long-session compaction for Codex requests is summarized by this hub using the same provider's model and returned in the Responses compaction protocol. Use it when the upstream does not implement compaction itself."
+    },
     "options": {
       "title": "Options",
       "desc": "Additional provider options and overrides"

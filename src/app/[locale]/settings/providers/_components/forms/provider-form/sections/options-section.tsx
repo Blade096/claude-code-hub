@@ -90,6 +90,20 @@ export function OptionsSection({ subSectionRefs }: OptionsSectionProps) {
                 />
               </ToggleRow>
 
+              <ToggleRow
+                label={t("sections.routing.remoteCompactionV2.label")}
+                description={t("sections.routing.remoteCompactionV2.desc")}
+              >
+                <Switch
+                  id={isEdit ? "edit-remote-compaction-v2" : "remote-compaction-v2"}
+                  checked={state.routing.remoteCompactionV2}
+                  onCheckedChange={(checked) =>
+                    dispatch({ type: "SET_REMOTE_COMPACTION_V2", payload: checked })
+                  }
+                  disabled={state.ui.isPending}
+                />
+              </ToggleRow>
+
               {/* Swap Cache TTL Billing */}
               <ToggleRow
                 label={t("sections.routing.swapCacheTtlBilling.label")}

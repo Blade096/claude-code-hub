@@ -14,6 +14,17 @@ const mocks = vi.hoisted(() => ({
     markOriginUnhealthy: vi.fn(),
     releaseAgent: vi.fn(),
   })),
+  wsEligible: vi.fn(async () => ({ eligible: true })),
+  wsAttempt: vi.fn(async () => ({ reason: "handshake_failed", connected: false })),
+}));
+
+vi.mock("@/app/v1/_lib/responses-ws/eligibility", () => ({
+  evaluateResponsesWsEligibility: mocks.wsEligible,
+  getResponsesWsSessionId: vi.fn(() => "ws-session"),
+}));
+
+vi.mock("@/app/v1/_lib/responses-ws/upstream-adapter", () => ({
+  tryResponsesWebsocketUpstream: mocks.wsAttempt,
 }));
 
 vi.mock("@/lib/config", async (importOriginal) => {
@@ -139,6 +150,119 @@ describe("ProxyForwarder transport fallback gate", () => {
   it("对照组：默认策略下 H2 错误会透明回退到 HTTP/1.1", async () => {
     const provider = createProvider();
     const session = createSession(resolveEndpointPolicy("/v1/responses"));
+    const fetchSpy = vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode" as never);
+    (fetchSpy as unknown as { mockRejectedValueOnce: (e: Error) => void }).mockRejectedValueOnce(
+      http2Error()
+    );
+    (fetchSpy as unknown as { mockResolvedValueOnce: (v: Response) => void }).mockResolvedValueOnce(
+      new Response("{}", { status: 200, headers: { "content-type": "application/json" } })
+    );
+
+    const { doForward } = ProxyForwarder as unknown as {
+      doForward: (s: ProxySession, p: Provider, baseUrl: string) => Promise<Response>;
+    };
+
+    const response = await doForward(session, provider, provider.url);
+
+    expect(response.status).toBe(200);
+    expect((fetchSpy as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(2);
+  });
+
+  it("单次尝试策略下跳过 WS 上游尝试，只走 HTTP", async () => {
+    const provider = createProvider();
+    const session = createSession(SINGLE_ATTEMPT_ENDPOINT_POLICY);
+    const fetchSpy = vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode" as never);
+    (fetchSpy as unknown as { mockResolvedValue: (v: Response) => void }).mockResolvedValue(
+      new Response("{}", { status: 200, headers: { "content-type": "application/json" } })
+    );
+
+    const { doForward } = ProxyForwarder as unknown as {
+      doForward: (s: ProxySession, p: Provider, baseUrl: string) => Promise<Response>;
+    };
+
+    await doForward(session, provider, provider.url);
+
+    expect(mocks.wsAttempt).not.toHaveBeenCalled();
+    expect((fetchSpy as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(1);
+  });
+
+  it("对照组：默认策略下会先尝试 WS 上游", async () => {
+    const provider = createProvider();
+    const session = createSession(resolveEndpointPolicy("/v1/responses"));
+    const fetchSpy = vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode" as never);
+    (fetchSpy as unknown as { mockResolvedValue: (v: Response) => void }).mockResolvedValue(
+      new Response("{}", { status: 200, headers: { "content-type": "application/json" } })
+    );
+
+    const { doForward } = ProxyForwarder as unknown as {
+      doForward: (s: ProxySession, p: Provider, baseUrl: string) => Promise<Response>;
+    };
+
+    await doForward(session, provider, provider.url);
+
+    expect(mocks.wsAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("单次尝试策略下代理失败不再降级到直连", async () => {
+    const provider = createProvider();
+    provider.proxyUrl = "http://proxy.example.com:8080";
+    provider.proxyFallbackToDirect = true;
+    mocks.getProxyAgentForProvider.mockResolvedValue({
+      agent: undefined,
+      proxyUrl: "http://proxy.example.com:8080",
+      fallbackToDirect: true,
+      cacheKey: "proxy-cache",
+      dispatcherId: "proxy-dispatcher",
+    } as never);
+
+    const session = createSession(SINGLE_ATTEMPT_ENDPOINT_POLICY);
+    const fetchSpy = vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode" as never);
+    (fetchSpy as unknown as { mockRejectedValue: (e: Error) => void }).mockRejectedValue(
+      new Error("proxy connection failed")
+    );
+
+    const { doForward } = ProxyForwarder as unknown as {
+      doForward: (s: ProxySession, p: Provider, baseUrl: string) => Promise<Response>;
+    };
+
+    await expect(doForward(session, provider, provider.url)).rejects.toThrow();
+    expect((fetchSpy as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(1);
+  });
+
+  it("对照组：默认策略下代理失败会降级到直连", async () => {
+    const provider = createProvider();
+    provider.proxyUrl = "http://proxy.example.com:8080";
+    provider.proxyFallbackToDirect = true;
+    mocks.getProxyAgentForProvider.mockResolvedValue({
+      agent: undefined,
+      proxyUrl: "http://proxy.example.com:8080",
+      fallbackToDirect: true,
+      cacheKey: "proxy-cache",
+      dispatcherId: "proxy-dispatcher",
+    } as never);
+
+    const session = createSession(resolveEndpointPolicy("/v1/responses"));
+    const fetchSpy = vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode" as never);
+    (fetchSpy as unknown as { mockRejectedValueOnce: (e: Error) => void }).mockRejectedValueOnce(
+      new Error("proxy connection failed")
+    );
+    (fetchSpy as unknown as { mockResolvedValueOnce: (v: Response) => void }).mockResolvedValueOnce(
+      new Response("{}", { status: 200, headers: { "content-type": "application/json" } })
+    );
+
+    const { doForward } = ProxyForwarder as unknown as {
+      doForward: (s: ProxySession, p: Provider, baseUrl: string) => Promise<Response>;
+    };
+
+    const response = await doForward(session, provider, provider.url);
+
+    expect(response.status).toBe(200);
+    expect((fetchSpy as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(2);
+  });
+
+  it("raw 端点策略下 H2 透明回退仍然保留", async () => {
+    const provider = createProvider();
+    const session = createSession(resolveEndpointPolicy("/v1/responses/compact"));
     const fetchSpy = vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode" as never);
     (fetchSpy as unknown as { mockRejectedValueOnce: (e: Error) => void }).mockRejectedValueOnce(
       http2Error()

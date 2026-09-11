@@ -1754,31 +1754,42 @@ export class ProxyForwarder {
 
           // ⭐ 2. 客户端中断处理（不计入熔断器，不重试，立即返回）
           if (errorCategory === ErrorCategory.CLIENT_ABORT) {
-            logger.warn("ProxyForwarder: Client aborted, stopping immediately", {
-              providerId: currentProvider.id,
-              providerName: currentProvider.name,
-              attemptNumber: attemptCount,
-              totalProvidersAttempted,
-            });
+            // 内部子请求（例如压缩摘要）有自己的 deadline，超时同样会以 AbortError
+            // 结束，但它不是客户端断开：不能清掉父会话的供应商绑定，也不该往父会话
+            // 的决策链里写 client_abort。
+            const isInternalSubrequest = session.isSingleAttemptMode?.() === true;
+            logger.warn(
+              isInternalSubrequest
+                ? "ProxyForwarder: Internal subrequest aborted, skipping client-abort side effects"
+                : "ProxyForwarder: Client aborted, stopping immediately",
+              {
+                providerId: currentProvider.id,
+                providerName: currentProvider.name,
+                attemptNumber: attemptCount,
+                totalProvidersAttempted,
+              }
+            );
 
-            await ProxyForwarder.clearSessionProviderBinding(session);
+            if (!isInternalSubrequest) {
+              await ProxyForwarder.clearSessionProviderBinding(session);
 
-            // 记录到决策链（标记为客户端中断）
-            session.addProviderToChain(currentProvider, {
-              ...endpointAudit,
-              reason: "client_abort",
-              circuitState: getCircuitState(currentProvider.id),
-              attemptNumber: attemptCount,
-              errorMessage: "Client aborted request",
-              errorDetails: {
-                system: {
-                  errorType: "ClientAbort",
-                  errorName: "ClientAbort",
-                  errorMessage: "Client aborted request",
+              // 记录到决策链（标记为客户端中断）
+              session.addProviderToChain(currentProvider, {
+                ...endpointAudit,
+                reason: "client_abort",
+                circuitState: getCircuitState(currentProvider.id),
+                attemptNumber: attemptCount,
+                errorMessage: "Client aborted request",
+                errorDetails: {
+                  system: {
+                    errorType: "ClientAbort",
+                    errorName: "ClientAbort",
+                    errorMessage: "Client aborted request",
+                  },
+                  request: buildRequestDetails(session),
                 },
-                request: buildRequestDetails(session),
-              },
-            });
+              });
+            }
 
             throw lastError;
           }

@@ -71,9 +71,6 @@ export async function tryRemoteCompactionSynthesis(
     ? ModelRedirector.getRedirectedModel(requestedModel, provider)
     : requestedModel;
 
-  // 客户端可能在生产、结算或投递的任意阶段断开，所以监听整个流程而不是只采样一次。
-  const delivery = trackClientDelivery(session.clientAbortSignal);
-
   const { items: historyWithoutTrigger } = normalizeInputWithoutTrigger(requestBody.input);
   const fingerprint = compactionFingerprint({
     sessionId: session.sessionId ?? null,
@@ -86,6 +83,10 @@ export async function tryRemoteCompactionSynthesis(
   if (cached) {
     return replayCachedCompaction(session, cached, startedAt);
   }
+
+  // 客户端可能在生产、结算或投递的任意阶段断开，所以监听整个流程而不是只采样一次。
+  // 放在缓存未命中之后创建，命中直接返回那条路径不会留下需要释放的监听器。
+  const delivery = trackClientDelivery(session.clientAbortSignal);
 
   // 摘要通常要十几秒。如果等它跑完再返回响应头，中间层（Cloudflare 一类对
   // 「无响应体」的超时）会掐掉连接，客户端只能重试。先把 SSE 建立起来，
@@ -114,6 +115,8 @@ export async function tryRemoteCompactionSynthesis(
 
 type DeliveryTracker = {
   readonly aborted: boolean;
+  /** 客户端取消流（断开）时调用，用于在投递阶段之外也标记断开。 */
+  markDisconnected(): void;
   dispose(): void;
 };
 
@@ -134,6 +137,9 @@ function trackClientDelivery(signal: AbortSignal | null): DeliveryTracker {
   return {
     get aborted() {
       return aborted;
+    },
+    markDisconnected() {
+      aborted = true;
     },
     dispose() {
       signal?.removeEventListener("abort", onAbort);
@@ -556,6 +562,7 @@ function buildStreamingCompactionResponse(
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       let closed = false;
+      let producedResult = false;
       const send = (chunk: string) => {
         if (closed) return;
         try {
@@ -571,6 +578,7 @@ function buildStreamingCompactionResponse(
 
       try {
         const outcome = await produce();
+        producedResult = outcome.ok;
         send(
           outcome.ok
             ? formatCompactionEvents(outcome)
@@ -609,8 +617,10 @@ function buildStreamingCompactionResponse(
 
         if (delivery.aborted) {
           logger.warn(
-            "[RemoteCompaction] Client disconnected before delivery; result cached for retry",
-            { deliveryAborted: true }
+            producedResult
+              ? "[RemoteCompaction] Client disconnected before delivery; result cached for retry"
+              : "[RemoteCompaction] Client disconnected before delivery; no compaction result produced",
+            { deliveryAborted: true, cached: producedResult }
           );
         }
         delivery.dispose();
@@ -618,6 +628,8 @@ function buildStreamingCompactionResponse(
     },
     cancel() {
       // 客户端断开后不取消摘要：让它跑完写进缓存，重试即可命中。
+      delivery.markDisconnected();
+      delivery.dispose();
     },
   });
 

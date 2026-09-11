@@ -46,7 +46,7 @@ function createProvider(): Provider {
   } as unknown as Provider;
 }
 
-function createSession(provider: Provider): ProxySession {
+function createSession(provider: Provider, options: { singleAttempt: boolean }): ProxySession {
   const body = JSON.stringify({ model: "deepseek-v4-pro", stream: false, input: [] });
   const headers = new Headers({ "content-type": "application/json" });
   const session = Object.create(ProxySession.prototype);
@@ -76,9 +76,16 @@ function createSession(provider: Provider): ProxySession {
     providerType: null,
     originalUrlPathname: null,
     providerChain: [],
-    endpointPolicy: SINGLE_ATTEMPT_ENDPOINT_POLICY,
+    endpointPolicy: options.singleAttempt
+      ? SINGLE_ATTEMPT_ENDPOINT_POLICY
+      : resolveEndpointPolicy("/v1/responses"),
     isRawCrossProviderFallbackEnabled: vi.fn(() => false),
-    getEndpointPolicy: vi.fn(() => SINGLE_ATTEMPT_ENDPOINT_POLICY),
+    getEndpointPolicy: vi.fn(() =>
+      options.singleAttempt
+        ? SINGLE_ATTEMPT_ENDPOINT_POLICY
+        : resolveEndpointPolicy("/v1/responses")
+    ),
+    isSingleAttemptMode: vi.fn(() => options.singleAttempt),
     setProvider: vi.fn(),
     addProviderToChain: vi.fn(),
     getProviderChain: vi.fn(() => []),
@@ -106,7 +113,7 @@ describe("ProxyForwarder single-attempt policy", () => {
 
   it("只发送一次，不重试也不切换供应商", async () => {
     const provider = createProvider();
-    const session = createSession(provider);
+    const session = createSession(provider, { singleAttempt: true });
 
     const doForward = vi.spyOn(ProxyForwarder as never, "doForward" as never);
     (doForward as unknown as { mockRejectedValue: (e: Error) => void }).mockRejectedValue(
@@ -126,10 +133,7 @@ describe("ProxyForwarder single-attempt policy", () => {
 
   it("对照组：默认策略下同一个失败会重试并进入供应商切换", async () => {
     const provider = createProvider();
-    const session = createSession(provider);
-    (
-      session.getEndpointPolicy as unknown as { mockReturnValue: (v: unknown) => void }
-    ).mockReturnValue(resolveEndpointPolicy("/v1/responses"));
+    const session = createSession(provider, { singleAttempt: false });
 
     const doForward = vi.spyOn(ProxyForwarder as never, "doForward" as never);
     (doForward as unknown as { mockRejectedValue: (e: Error) => void }).mockRejectedValue(
@@ -151,4 +155,55 @@ describe("ProxyForwarder single-attempt policy", () => {
     ).toBeGreaterThan(1);
     expect(selectAlternative).toHaveBeenCalled();
   });
+
+  it("内部子请求超时不被当作客户端断开，不清父会话绑定", async () => {
+    const provider = createProvider();
+    const session = createSession(provider, { singleAttempt: true });
+
+    const doForward = vi.spyOn(ProxyForwarder as never, "doForward" as never);
+    (doForward as unknown as { mockRejectedValue: (e: Error) => void }).mockRejectedValue(
+      Object.assign(new Error("The operation was aborted"), { name: "AbortError" })
+    );
+    const clearBinding = vi
+      .spyOn(
+        ProxyForwarder as unknown as { clearSessionProviderBinding: () => Promise<void> },
+        "clearSessionProviderBinding"
+      )
+      .mockResolvedValue(undefined);
+
+    await expect(ProxyForwarder.send(session)).rejects.toThrow();
+
+    expect(clearBinding).not.toHaveBeenCalled();
+    expect(hasClientAbortChainEntry(session)).toBe(false);
+  });
+
+  it("对照组：真实客户端中断仍会清父会话绑定并记录 client_abort", async () => {
+    const provider = createProvider();
+    const session = createSession(provider, { singleAttempt: false });
+
+    const doForward = vi.spyOn(ProxyForwarder as never, "doForward" as never);
+    (doForward as unknown as { mockRejectedValue: (e: Error) => void }).mockRejectedValue(
+      Object.assign(new Error("The operation was aborted"), { name: "AbortError" })
+    );
+    const clearBinding = vi
+      .spyOn(
+        ProxyForwarder as unknown as { clearSessionProviderBinding: () => Promise<void> },
+        "clearSessionProviderBinding"
+      )
+      .mockResolvedValue(undefined);
+
+    await expect(ProxyForwarder.send(session)).rejects.toThrow();
+
+    expect(clearBinding).toHaveBeenCalled();
+    expect(hasClientAbortChainEntry(session)).toBe(true);
+  });
 });
+
+function hasClientAbortChainEntry(session: ProxySession): boolean {
+  const addProviderToChain = session.addProviderToChain as unknown as {
+    mock: { calls: unknown[][] };
+  };
+  return addProviderToChain.mock.calls.some(
+    (call) => (call[1] as { reason?: string } | undefined)?.reason === "client_abort"
+  );
+}

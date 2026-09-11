@@ -596,4 +596,35 @@ describe("remote compaction synthesis", () => {
     expect(body).not.toContain("upstream secret detail");
     expect(body).toContain("remote_compaction_failed");
   });
+
+  it("does not leak abort listeners, including on the cache-hit path", async () => {
+    const listeners = new Set<() => void>();
+    const fakeSignal = {
+      aborted: false,
+      addEventListener: (_type: string, listener: () => void) => listeners.add(listener),
+      removeEventListener: (_type: string, listener: () => void) => listeners.delete(listener),
+    } as unknown as AbortSignal;
+
+    sendMock.mockResolvedValue(
+      new Response(JSON.stringify({ output: [{ content: [{ text: "summary" }] }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    );
+
+    const first = makeSession({ remoteCompactionV2: true });
+    first.session.clientAbortSignal = fakeSignal;
+    const firstResponse = await tryRemoteCompactionSynthesis(first.session);
+    await firstResponse!.text();
+    // 生产流程结束后监听器必须被移除
+    expect(listeners.size).toBe(0);
+
+    const second = makeSession({ remoteCompactionV2: true });
+    second.session.clientAbortSignal = fakeSignal;
+    const secondResponse = await tryRemoteCompactionSynthesis(second.session);
+    await secondResponse!.text();
+    // 缓存命中路径根本不该注册监听器
+    expect(listeners.size).toBe(0);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
 });

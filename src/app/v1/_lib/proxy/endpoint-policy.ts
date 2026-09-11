@@ -13,7 +13,7 @@ export interface EndpointPolicy {
    * 是否允许同一次请求内的传输层回退：WS→HTTP、HTTP/2→HTTP/1.1、代理→直连。
    * 这些回退会重新发送同一份请求体，因此内部单次尝试子请求必须关掉。
    */
-  readonly allowTransportFallback?: boolean;
+  readonly allowTransportFallback: boolean;
   readonly allowRawCrossProviderFallback: boolean;
   readonly allowCircuitBreakerAccounting: boolean;
   readonly trackConcurrentRequests: boolean;

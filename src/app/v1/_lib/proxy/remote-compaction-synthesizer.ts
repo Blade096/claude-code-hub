@@ -1,6 +1,7 @@
 import { logger } from "@/lib/logger";
 import { ProxyForwarder } from "./forwarder";
 import { ModelRedirector } from "./model-redirector";
+import { translateProxyError } from "./proxy-error-i18n";
 import {
   asRecord,
   buildCompactionSummaryInput,
@@ -86,15 +87,23 @@ export async function tryRemoteCompactionSynthesis(
   // 摘要通常要十几秒。如果等它跑完再返回响应头，中间层（Cloudflare 一类对
   // 「无响应体」的超时）会掐掉连接，客户端只能重试。先把 SSE 建立起来，
   // 摘要期间用心跳注释保活，完成后再补协议事件。
-  return buildStreamingCompactionResponse(() =>
-    produceCompactionResult(session, {
-      requestBody,
-      provider,
-      effectiveModel,
-      requestedModel,
-      fingerprint,
-      startedAt,
-    })
+  // 对外只发本地化通用文案，上游细节留在日志与请求记录里。
+  const failureMessage = translateProxyError(
+    "remote_compaction_failed",
+    session.headers.get("accept-language")
+  );
+
+  return buildStreamingCompactionResponse(
+    () =>
+      produceCompactionResult(session, {
+        requestBody,
+        provider,
+        effectiveModel,
+        requestedModel,
+        fingerprint,
+        startedAt,
+      }),
+    failureMessage
   );
 }
 
@@ -200,10 +209,12 @@ async function produceCompactionResult(
 
   let summaryText: string;
   let usage: CompactionUsage;
+  let deliveryAborted = false;
   try {
     const result = await runSummaryRequest(session, summaryBody);
     summaryText = result.text;
     usage = result.usage;
+    deliveryAborted = result.deliveryAborted;
   } catch (error) {
     const message = error instanceof Error ? error.message : "摘要生成失败";
     logger.error("[RemoteCompaction] Summary request failed", {
@@ -256,7 +267,16 @@ async function produceCompactionResult(
     summaryChars: summaryText.length,
     tokenBytes: token.length,
     usage,
+    deliveryAborted,
   });
+
+  if (deliveryAborted) {
+    logger.warn("[RemoteCompaction] Client disconnected before delivery; result cached for retry", {
+      providerId: provider.id,
+      model: effectiveModel,
+      deliveryAborted: true,
+    });
+  }
 
   await releaseLock();
   return { ok: true, token, compactionId, responseId, usage };
@@ -305,7 +325,7 @@ type CompactionUsage = {
 async function runSummaryRequest(
   session: ProxySession,
   summaryBody: Record<string, unknown>
-): Promise<{ text: string; usage: CompactionUsage }> {
+): Promise<{ text: string; usage: CompactionUsage; deliveryAborted: boolean }> {
   const snapshot = {
     message: session.request.message,
     model: session.request.model,
@@ -318,6 +338,7 @@ async function runSummaryRequest(
   // 同时给它自己的超时，并把策略切成单次尝试，避免重试或切到别的供应商。
   const internalAbort = new AbortController();
   const previousAbortSignal = session.clientAbortSignal;
+  const previousSingleAttemptMode = session.isSingleAttemptMode();
   const timeout = setTimeout(() => internalAbort.abort(), SUMMARY_TIMEOUT_MS);
   session.setInternalRequestAbortSignal(internalAbort.signal);
   session.setSingleAttemptMode(true);
@@ -346,11 +367,16 @@ async function runSummaryRequest(
       throw new Error("上游没有返回可用的摘要文本");
     }
 
-    return { text, usage: extractUsage(payload) };
+    // 摘要期间客户端可能已经断开：结果照样算完并写缓存，但要把这件事记下来。
+    return {
+      text,
+      usage: extractUsage(payload),
+      deliveryAborted: previousAbortSignal?.aborted === true,
+    };
   } finally {
     clearTimeout(timeout);
     session.setInternalRequestAbortSignal(previousAbortSignal);
-    session.setSingleAttemptMode(false);
+    session.setSingleAttemptMode(previousSingleAttemptMode);
     session.request.message = snapshot.message;
     session.request.model = snapshot.model;
     session.request.buffer = snapshot.buffer;
@@ -492,7 +518,10 @@ function formatSseEvent(event: string, data: unknown): string {
  * 先建立 SSE，摘要期间持续发心跳，拿到结果后再补协议事件。
  * 失败时发 response.failed（流已建立，不能再改回 JSON 错误）。
  */
-function buildStreamingCompactionResponse(produce: () => Promise<CompactionOutcome>): Response {
+function buildStreamingCompactionResponse(
+  produce: () => Promise<CompactionOutcome>,
+  failureMessage: string
+): Response {
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream<Uint8Array>({
@@ -522,7 +551,7 @@ function buildStreamingCompactionResponse(produce: () => Promise<CompactionOutco
                   status: "failed",
                   error: {
                     code: "remote_compaction_failed",
-                    message: `远程压缩失败：${outcome.message}`,
+                    message: failureMessage,
                   },
                 },
               })
@@ -535,7 +564,7 @@ function buildStreamingCompactionResponse(produce: () => Promise<CompactionOutco
               status: "failed",
               error: {
                 code: "remote_compaction_failed",
-                message: `远程压缩失败：${error instanceof Error ? error.message : "未知错误"}`,
+                message: failureMessage,
               },
             },
           })

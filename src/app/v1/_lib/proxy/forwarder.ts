@@ -1784,17 +1784,20 @@ export class ProxyForwarder {
           }
 
           // 2.5 Reactive rectifier：命中后对同供应商“整流 + 重试一次”
-          const reactiveRectifierResult = await tryApplyReactiveRectifier({
-            provider: currentProvider,
-            requestSession: session,
-            persistSession: session,
-            errorMessage,
-            attemptNumber: attemptCount,
-            retryAttemptNumber: attemptCount + 1,
-            retryState: reactiveRectifierRetryState,
-          });
+          // 单次尝试策略（内部子请求）下不做整流重试，直接按失败处理。
+          const reactiveRectifierResult = endpointPolicy.allowRetry
+            ? await tryApplyReactiveRectifier({
+                provider: currentProvider,
+                requestSession: session,
+                persistSession: session,
+                errorMessage,
+                attemptNumber: attemptCount,
+                retryAttemptNumber: attemptCount + 1,
+                retryState: reactiveRectifierRetryState,
+              })
+            : null;
 
-          if (reactiveRectifierResult.matched) {
+          if (reactiveRectifierResult?.matched) {
             if (!reactiveRectifierResult.applied) {
               if (reactiveRectifierResult.reason === "not_applicable") {
                 logger.info(
@@ -2299,10 +2302,13 @@ export class ProxyForwarder {
       } // ========== 内层循环结束 ==========
 
       // ========== 供应商切换逻辑 ==========
-      const alternativeProvider = await ProxyForwarder.selectAlternative(
-        session,
-        failedProviderIds
-      );
+      // 单次尝试策略不允许把完整会话历史交给另一个供应商：策略关闭时直接按
+      // 「无可用供应商」处理，走下方统一的失败收尾。
+      // 注意保留既有 raw 端点语义：开了跨供应商 fallback 时仍然允许切换。
+      const canSwitchProvider = endpointPolicy.allowProviderSwitch || rawCrossProviderFallbackEnabled;
+      const alternativeProvider = canSwitchProvider
+        ? await ProxyForwarder.selectAlternative(session, failedProviderIds)
+        : null;
 
       if (!alternativeProvider) {
         // ⭐ 无可用供应商：所有供应商都失败了
@@ -3350,7 +3356,9 @@ export class ProxyForwarder {
       // ⭐ HTTP/2 协议错误检测与透明回退
       // 场景：HTTP/2 连接失败（GOAWAY、RST_STREAM、PROTOCOL_ERROR 等）
       // 策略：透明回退到 HTTP/1.1，不触发供应商切换或熔断器
-      if (enableHttp2 && isHttp2Error(err)) {
+      // 单次尝试策略下回退也算二次发送，必须关掉。
+      const canRetryHttp2Fallback = ProxyForwarder.getEndpointPolicy(session).allowRetry;
+      if (canRetryHttp2Fallback && enableHttp2 && isHttp2Error(err)) {
         const http2CacheKey = proxyConfig?.cacheKey ?? directConnectionCacheKey;
         const http2DispatcherId = proxyConfig?.dispatcherId ?? directConnectionDispatcherId;
         logger.warn("ProxyForwarder: HTTP/2 protocol error detected, falling back to HTTP/1.1", {
@@ -3500,7 +3508,9 @@ export class ProxyForwarder {
           });
 
           // 如果配置了降级到直连，尝试不使用代理
-          if (proxyConfig.fallbackToDirect) {
+          // 单次尝试策略下不再换连接方式重发。
+          const canFallbackToDirect = ProxyForwarder.getEndpointPolicy(session).allowRetry;
+          if (proxyConfig.fallbackToDirect && canFallbackToDirect) {
             logger.warn("ProxyForwarder: Falling back to direct connection", {
               providerId: provider.id,
               providerName: provider.name,

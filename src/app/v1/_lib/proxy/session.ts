@@ -433,6 +433,11 @@ export class ProxySession {
     this.internalSingleAttemptMode = enabled;
   }
 
+  /** 读取当前是否处于单次尝试模式，便于调用方按作用域恢复。 */
+  isSingleAttemptMode(): boolean {
+    return this.internalSingleAttemptMode;
+  }
+
   isRawCrossProviderFallbackEnabled(): boolean {
     const endpointPolicy =
       this.endpointPolicy ??

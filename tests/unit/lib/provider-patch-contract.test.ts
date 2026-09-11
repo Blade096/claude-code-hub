@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildProviderBatchApplyUpdates,
+  hasProviderBatchPatchChanges,
   normalizeProviderBatchPatchDraft,
 } from "@/lib/provider-patch-contract";
 
@@ -72,5 +73,16 @@ describe("provider-patch-contract - remote compaction toggle", () => {
     });
 
     expect(normalized.ok).toBe(false);
+  });
+
+  it("treats a remote_compaction_v2-only patch as a real change", () => {
+    const normalized = normalizeProviderBatchPatchDraft({
+      remote_compaction_v2: { set: true },
+    });
+
+    expect(normalized.ok).toBe(true);
+    if (!normalized.ok) return;
+
+    expect(hasProviderBatchPatchChanges(normalized.data)).toBe(true);
   });
 });

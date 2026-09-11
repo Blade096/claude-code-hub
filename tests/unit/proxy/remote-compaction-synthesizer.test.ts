@@ -65,6 +65,7 @@ function makeSession(options: { remoteCompactionV2: boolean }): FakeSession {
   const session = {
     originalFormat: "response",
     requestUrl: new URL("https://hub.test/v1/responses"),
+    headers: new Headers(),
     request,
     provider: {
       id: 7,
@@ -84,6 +85,7 @@ function makeSession(options: { remoteCompactionV2: boolean }): FakeSession {
       singleAttemptCalls.push(enabled);
       singleAttempt = enabled;
     },
+    isSingleAttemptMode: () => singleAttempt,
     getEndpointPolicy: () =>
       singleAttempt ? SINGLE_ATTEMPT_ENDPOINT_POLICY : resolveEndpointPolicy("/v1/responses"),
   } as unknown as ProxySession;
@@ -508,5 +510,72 @@ describe("remote compaction synthesis", () => {
 
     expect(singleAttemptCalls).toEqual([true, false]);
     expect(session.getEndpointPolicy().allowRetry).toBe(true);
+  });
+
+  it("aborts the internal summary signal when the deadline expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const { session, abortSignals } = makeSession({ remoteCompactionV2: true });
+      // 上游永不返回，只能靠自身超时兜住
+      sendMock.mockImplementation(() => new Promise<Response>(() => {}));
+
+      void tryRemoteCompactionSynthesis(session);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(abortSignals.length).toBeGreaterThan(0);
+      const internalSignal = abortSignals[0] as AbortSignal;
+      expect(internalSignal.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(internalSignal.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caches the result even when the client disconnected mid-summary", async () => {
+    const clientController = new AbortController();
+    const { session } = makeSession({ remoteCompactionV2: true });
+    session.clientAbortSignal = clientController.signal;
+
+    sendMock.mockImplementation(async () => {
+      clientController.abort();
+      return new Response(
+        JSON.stringify({ output: [{ content: [{ text: "cached despite disconnect" }] }] }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    });
+
+    const response = await tryRemoteCompactionSynthesis(session);
+    await response!.text();
+    expect(sendMock).toHaveBeenCalledTimes(1);
+
+    // 重试（新会话、同历史）必须直接命中缓存，不再调用上游
+    const retry = makeSession({ remoteCompactionV2: true });
+    const retryResponse = await tryRemoteCompactionSynthesis(retry.session);
+    const retryEvents = sseEvents(await retryResponse!.text());
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(
+      decodeCompactionSummary(
+        (retryEvents[0].data.item as Record<string, unknown>).encrypted_content
+      ).s
+    ).toBe("cached despite disconnect");
+  });
+
+  it("returns a localized failure message without leaking upstream detail", async () => {
+    const { session } = makeSession({ remoteCompactionV2: true });
+    session.headers = new Headers({ "accept-language": "en-US,en;q=0.9" });
+    sendMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: "upstream secret detail" } }), {
+        status: 500,
+      })
+    );
+
+    const response = await tryRemoteCompactionSynthesis(session);
+    const body = await response!.text();
+
+    expect(body).toContain("Remote compaction failed");
+    expect(body).not.toContain("upstream secret detail");
+    expect(body).toContain("remote_compaction_failed");
   });
 });

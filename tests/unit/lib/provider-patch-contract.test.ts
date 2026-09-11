@@ -49,3 +49,28 @@ describe("provider-patch-contract - codex service tier", () => {
     expect(updates.data.codex_image_generation_preference).toBe("false");
   });
 });
+
+describe("provider-patch-contract - remote compaction toggle", () => {
+  it("normalizes the remote_compaction_v2 patch draft", () => {
+    const normalized = normalizeProviderBatchPatchDraft({
+      remote_compaction_v2: { set: true },
+    });
+
+    expect(normalized.ok).toBe(true);
+    if (!normalized.ok) return;
+
+    const updates = buildProviderBatchApplyUpdates(normalized.data);
+    expect(updates.ok).toBe(true);
+    if (!updates.ok) return;
+
+    expect(updates.data.remote_compaction_v2).toBe(true);
+  });
+
+  it("rejects a non-boolean value for remote_compaction_v2", () => {
+    const normalized = normalizeProviderBatchPatchDraft({
+      remote_compaction_v2: { set: "yes" },
+    });
+
+    expect(normalized.ok).toBe(false);
+  });
+});

@@ -14,6 +14,7 @@ function createBatchState(): ProviderFormState {
       groupTag: [],
       preserveClientIp: false,
       disableSessionReuse: false,
+      remoteCompactionV2: false,
       modelRedirects: [],
       allowedModels: [],
       allowedClients: [],
@@ -263,6 +264,16 @@ describe("buildPatchDraftFromFormState", () => {
     const draft = buildPatchDraftFromFormState(state, dirty);
 
     expect(draft.disable_session_reuse).toEqual({ set: true });
+  });
+
+  it("sets remoteCompactionV2 when dirty", () => {
+    const state = createBatchState();
+    state.routing.remoteCompactionV2 = true;
+    const dirty = new Set(["routing.remoteCompactionV2"]);
+
+    const draft = buildPatchDraftFromFormState(state, dirty);
+
+    expect(draft.remote_compaction_v2).toEqual({ set: true });
   });
 
   it("sets swapCacheTtlBilling when dirty", () => {

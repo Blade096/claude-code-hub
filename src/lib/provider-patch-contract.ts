@@ -768,6 +768,10 @@ function applyPatchField<T>(
         updates.disable_session_reuse =
           patch.value as ProviderBatchApplyUpdates["disable_session_reuse"];
         return { ok: true, data: undefined };
+      case "remote_compaction_v2":
+        updates.remote_compaction_v2 =
+          patch.value as ProviderBatchApplyUpdates["remote_compaction_v2"];
+        return { ok: true, data: undefined };
       case "group_priorities":
         updates.group_priorities = patch.value as ProviderBatchApplyUpdates["group_priorities"];
         return { ok: true, data: undefined };
@@ -1015,6 +1019,7 @@ export function buildProviderBatchApplyUpdates(
     ["active_time_end", patch.active_time_end],
     ["preserve_client_ip", patch.preserve_client_ip],
     ["disable_session_reuse", patch.disable_session_reuse],
+    ["remote_compaction_v2", patch.remote_compaction_v2],
     ["group_priorities", patch.group_priorities],
     ["cache_ttl_preference", patch.cache_ttl_preference],
     ["swap_cache_ttl_billing", patch.swap_cache_ttl_billing],
@@ -1084,6 +1089,7 @@ export function hasProviderBatchPatchChanges(patch: ProviderBatchPatch): boolean
     patch.active_time_end.mode !== "no_change" ||
     patch.preserve_client_ip.mode !== "no_change" ||
     patch.disable_session_reuse.mode !== "no_change" ||
+    patch.remote_compaction_v2.mode !== "no_change" ||
     patch.group_priorities.mode !== "no_change" ||
     patch.cache_ttl_preference.mode !== "no_change" ||
     patch.swap_cache_ttl_billing.mode !== "no_change" ||

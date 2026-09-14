@@ -1,12 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMock = vi.fn();
+const updateDetailsMock = vi.fn();
+const updateDurationMock = vi.fn();
+const updateCostMock = vi.fn();
 
 vi.mock("@/app/v1/_lib/proxy/forwarder", () => ({
   ProxyForwarder: { send: (...args: unknown[]) => sendMock(...args) },
 }));
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn() },
+}));
+vi.mock("@/repository/message", () => ({
+  addMessageRequestHedgeLoserCost: vi.fn(),
+  updateMessageRequestCostWithBreakdown: (...args: unknown[]) => updateCostMock(...args),
+  updateMessageRequestDetails: (...args: unknown[]) => updateDetailsMock(...args),
+  updateMessageRequestDuration: (...args: unknown[]) => updateDurationMock(...args),
+  updateMessageRequestWinnerCost: vi.fn(),
 }));
 
 import {
@@ -42,7 +52,7 @@ type FakeSession = {
   abortSignals: (AbortSignal | null)[];
 };
 
-function makeSession(options: { remoteCompactionV2: boolean }): FakeSession {
+function makeSession(options: { remoteCompactionV2: boolean; trackUsage?: boolean }): FakeSession {
   const sentBodies: Record<string, unknown>[] = [];
   const singleAttemptCalls: boolean[] = [];
   const abortSignals: (AbortSignal | null)[] = [];
@@ -71,11 +81,37 @@ function makeSession(options: { remoteCompactionV2: boolean }): FakeSession {
     provider: {
       id: 7,
       name: "deepseek",
+      providerType: "codex",
+      costMultiplier: 1,
+      swapCacheTtlBilling: false,
       remoteCompactionV2: options.remoteCompactionV2,
       modelRedirects: null,
     },
+    messageContext: options.trackUsage
+      ? { id: 321, createdAt: new Date("2026-09-14T12:00:00Z") }
+      : null,
     sessionId: "01a08fc2-d8f1-7165-ade4-74a92cbf6f85",
     getOriginalModel: () => "deepseek-v4-pro",
+    getCurrentModel: () => "deepseek-v4-pro",
+    getEndpoint: () => "/v1/responses",
+    getResolvedPricingByBillingSource: vi.fn().mockResolvedValue({
+      source: "cloud_exact",
+      resolvedModelName: "deepseek-v4-pro",
+      resolvedPricingProviderKey: "deepseek",
+      priceData: {
+        input_cost_per_token: 0.00000015,
+        output_cost_per_token: 0.0000006,
+        cache_read_input_token_cost: 0.000000003,
+      },
+    }),
+    getContext1mApplied: () => false,
+    setContext1mApplied: vi.fn(),
+    getGroupCostMultiplier: () => 1,
+    getProviderChain: () => [{ id: 7, name: "deepseek", reason: "request_success" }],
+    getSpecialSettings: vi.fn(() => null),
+    addSpecialSetting: vi.fn(),
+    shouldTrackSessionObservability: () => false,
+    requestSequence: null,
     clientAbortSignal: null as AbortSignal | null,
     // 与 session.ts 的实现保持一致：替换中断信号、切换单次尝试策略
     setInternalRequestAbortSignal(signal: AbortSignal | null) {
@@ -160,6 +196,9 @@ function sseEvents(body: string): { event: string; data: Record<string, unknown>
 describe("remote compaction synthesis", () => {
   beforeEach(() => {
     sendMock.mockReset();
+    updateDetailsMock.mockReset();
+    updateDurationMock.mockReset();
+    updateCostMock.mockReset();
     setRemoteCompactionCacheStoreForTests(null);
     setRemoteCompactionLockForTests(null);
     installInMemoryCacheStore();
@@ -231,6 +270,49 @@ describe("remote compaction synthesis", () => {
     >;
     expect(usage.input_tokens).toBe(120);
     expect(usage.output_tokens).toBe(40);
+  });
+
+  it("normalizes cached input and bills a synthesized compaction request", async () => {
+    const { session } = makeSession({ remoteCompactionV2: true, trackUsage: true });
+    sendMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          output: [{ content: [{ text: "summary" }] }],
+          usage: {
+            input_tokens: 1000,
+            output_tokens: 100,
+            total_tokens: 1100,
+            input_tokens_details: { cached_tokens: 400 },
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const response = await tryRemoteCompactionSynthesis(session);
+    await response!.text();
+
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      "[RemoteCompaction] Failed to finalize message request record",
+      expect.anything()
+    );
+    expect(updateDetailsMock).toHaveBeenCalledWith(
+      321,
+      expect.objectContaining({
+        inputTokens: 600,
+        outputTokens: 100,
+        cacheReadInputTokens: 400,
+        actualResponseModel: "deepseek-v4-pro",
+      })
+    );
+    expect(updateCostMock).toHaveBeenCalledTimes(1);
+    expect(String(updateCostMock.mock.calls[0]?.[1])).toBe("0.0001512");
+    expect(session.addSpecialSetting).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "pricing_resolution",
+        source: "cloud_exact",
+      })
+    );
   });
 
   it("restores the original session request after the summary call", async () => {

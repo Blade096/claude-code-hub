@@ -67,4 +67,43 @@ describe("ProxyForwarder - statusText", () => {
     expect(response.status).toBe(499);
     expect(response.statusText).toBe("");
   });
+
+  it("自定义 dispatcher 应直接调用实例且不回传 dispatcher 选项", async () => {
+    vi.resetModules();
+    undiciMocks.request.mockImplementation(() => {
+      throw new Error(
+        "opts.dispatcher is not supported by instance methods. Pass opts.dispatcher to the top-level undici functions or call the dispatcher instance method directly."
+      );
+    });
+    const dispatcherRequest = vi.fn().mockResolvedValue({
+      statusCode: 200,
+      headers: { "content-type": "text/plain" },
+      body: Readable.from(["ok"]),
+    });
+
+    const { ProxyForwarder } = await import("@/app/v1/_lib/proxy/forwarder");
+    const fetchWithoutAutoDecode = (ProxyForwarder as any).fetchWithoutAutoDecode as (
+      url: string,
+      init: RequestInit & { dispatcher?: { request: typeof dispatcherRequest } },
+      providerId: number,
+      providerName: string
+    ) => Promise<Response>;
+
+    const response = await fetchWithoutAutoDecode(
+      "https://example.com/test?mode=compact",
+      { method: "GET", dispatcher: { request: dispatcherRequest } },
+      1,
+      "test-provider"
+    );
+
+    expect(response.status).toBe(200);
+    expect(undiciMocks.request).not.toHaveBeenCalled();
+    expect(dispatcherRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        origin: "https://example.com",
+        path: "/test?mode=compact",
+      })
+    );
+    expect(dispatcherRequest.mock.calls[0]?.[0]).not.toHaveProperty("dispatcher");
+  });
 });

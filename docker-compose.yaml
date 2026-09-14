@@ -56,6 +56,10 @@ services:
       - ./.env
     environment:
       NODE_ENV: production
+      # Docker injects HOSTNAME as the container ID. The custom server treats
+      # HOSTNAME as its bind address, which can select only one interface when
+      # the app joins multiple networks. Bind all interfaces explicitly.
+      HOSTNAME: "0.0.0.0"
       # 容器内使用 Dockerfile 默认端口 3000，对外通过 APP_PORT 暴露（默认 23000）
       DSN: postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-claude_code_hub}
       REDIS_URL: redis://redis:6379

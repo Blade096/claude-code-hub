@@ -5251,15 +5251,30 @@ export class ProxyForwarder {
       return undefined;
     };
 
-    const undiciRes = await undiciRequest(url, {
+    const requestOptions = {
       method: init.method as string,
       headers: headersObj,
       body: toUndiciBody(init.body),
       signal: init.signal,
-      dispatcher: init.dispatcher,
       bodyTimeout,
       headersTimeout,
-    });
+    };
+
+    // fetch-socks ships its own undici version. Passing that dispatcher through the
+    // top-level request() leaves opts.dispatcher on the options object when the call
+    // crosses the package boundary, and the instance method rejects it. Call custom
+    // dispatchers directly so the instance receives only request options.
+    let undiciRes;
+    if (init.dispatcher) {
+      const requestUrl = new URL(url);
+      undiciRes = await init.dispatcher.request({
+        ...requestOptions,
+        origin: requestUrl.origin,
+        path: `${requestUrl.pathname}${requestUrl.search}`,
+      });
+    } else {
+      undiciRes = await undiciRequest(url, requestOptions);
+    }
 
     // ⭐ 立即为 undici body 添加错误处理，防止 uncaughtException
     // 必须在任何其他操作之前设置，否则 ECONNRESET 等错误会导致 uncaughtException

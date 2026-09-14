@@ -523,19 +523,20 @@ async function finalizeCompactionRecord(
   }
 
   try {
-    const { updateMessageRequestDetails, updateMessageRequestDuration } = await import(
-      "@/repository/message"
-    );
-    await updateMessageRequestDetails(messageId, {
+    const { finalizeSyntheticResponseUsage } = await import("./response-handler");
+    await finalizeSyntheticResponseUsage(session, {
       statusCode: details.statusCode,
-      inputTokens: details.usage?.input_tokens,
-      outputTokens: details.usage?.output_tokens,
-      cacheReadInputTokens: details.usage?.cached_tokens,
-      model: details.model ?? undefined,
-      providerId: session.provider?.id,
+      durationMs: details.durationMs,
+      usage: details.usage
+        ? {
+            input_tokens: details.usage.input_tokens,
+            output_tokens: details.usage.output_tokens,
+            cache_read_input_tokens: details.usage.cached_tokens,
+          }
+        : undefined,
       errorMessage: details.errorMessage,
+      actualResponseModel: details.model,
     });
-    await updateMessageRequestDuration(messageId, details.durationMs);
   } catch (error) {
     logger.warn("[RemoteCompaction] Failed to finalize message request record", {
       messageId,

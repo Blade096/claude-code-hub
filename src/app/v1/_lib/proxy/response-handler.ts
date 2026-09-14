@@ -3935,6 +3935,97 @@ function normalizeUsageWithSwap(
   };
 }
 
+/**
+ * Finalize usage produced by an internal synthetic response path.
+ *
+ * Synthetic paths return before dispatch(), so they cannot rely on the normal
+ * response parser to normalize OpenAI-style cached tokens or run billing. Keep
+ * those paths on the same persistence and rate-limit accounting primitives as
+ * ordinary upstream responses.
+ */
+export async function finalizeSyntheticResponseUsage(
+  session: ProxySession,
+  details: {
+    statusCode: number;
+    durationMs: number;
+    usage?: {
+      input_tokens: number;
+      output_tokens: number;
+      cache_read_input_tokens?: number;
+    };
+    errorMessage?: string;
+    actualResponseModel: string | null;
+  }
+): Promise<void> {
+  const { messageContext, provider } = session;
+  if (!messageContext || !provider) return;
+
+  let normalizedUsage: UsageMetrics | null = null;
+  if (details.usage) {
+    normalizedUsage = normalizeUsageWithSwap(
+      adjustUsageForProviderType(details.usage, provider.providerType),
+      session,
+      provider.swapCacheTtlBilling
+    );
+    maybeSetCodexContext1m(session, provider, normalizedUsage.input_tokens);
+
+    const billing = sessionBillingInputs(session, provider, false);
+    const costUpdateResult = await updateRequestCostFromUsage(
+      messageContext.id,
+      session,
+      normalizedUsage,
+      billing
+    );
+    if (costUpdateResult.resolvedPricing) {
+      ensurePricingResolutionSpecialSetting(session, costUpdateResult.resolvedPricing);
+    }
+    if (costUpdateResult.longContextPricingApplied) {
+      ensureLongContextPricingAudit(session, costUpdateResult.longContextPricing);
+    }
+    await trackCostToRedis(session, normalizedUsage, billing, {
+      resolvedPricing: costUpdateResult.resolvedPricing,
+      longContextPricing: costUpdateResult.longContextPricing,
+    });
+
+    if (session.sessionId && session.shouldTrackSessionObservability()) {
+      void SessionManager.updateSessionUsage(session.sessionId, {
+        inputTokens: normalizedUsage.input_tokens,
+        outputTokens: normalizedUsage.output_tokens,
+        cacheReadInputTokens: normalizedUsage.cache_read_input_tokens,
+        costUsd: costUpdateResult.costUsd ?? undefined,
+        status: details.statusCode >= 200 && details.statusCode < 300 ? "completed" : "error",
+        statusCode: details.statusCode,
+        ...(details.errorMessage ? { errorMessage: details.errorMessage } : {}),
+      }).catch((error: unknown) => {
+        logger.error("[ResponseHandler] Failed to update synthetic session usage:", error);
+      });
+    }
+  }
+
+  await updateMessageRequestDetails(messageContext.id, {
+    statusCode: details.statusCode,
+    inputTokens: normalizedUsage?.input_tokens,
+    outputTokens: normalizedUsage?.output_tokens,
+    cacheReadInputTokens: normalizedUsage?.cache_read_input_tokens,
+    ttfbMs: session.ttfbMs ?? details.durationMs,
+    providerChain: session.getProviderChain(),
+    model: session.getCurrentModel() ?? undefined,
+    actualResponseModel: details.actualResponseModel ?? undefined,
+    providerId: provider.id,
+    context1mApplied: session.getContext1mApplied(),
+    swapCacheTtlApplied: provider.swapCacheTtlBilling ?? false,
+    specialSettings: session.getSpecialSettings() ?? undefined,
+    ...(details.errorMessage ? { errorMessage: details.errorMessage } : {}),
+  });
+  await updateMessageRequestDuration(messageContext.id, details.durationMs);
+
+  if (session.sessionId && session.requestSequence != null) {
+    if (session.shouldTrackSessionObservability()) {
+      void deleteLiveChain(session.sessionId, session.requestSequence);
+    }
+  }
+}
+
 async function updateRequestCostFromUsage(
   messageId: number,
   session: ProxySession,

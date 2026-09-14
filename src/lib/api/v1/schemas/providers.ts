@@ -375,6 +375,10 @@ export const ProviderCreateSchema = z
       .boolean()
       .optional()
       .describe("Whether sticky session reuse is disabled."),
+    remote_compaction_v2: z
+      .boolean()
+      .optional()
+      .describe("Whether CCH synthesizes Codex remote compaction for this provider."),
     model_redirects: z.array(z.unknown()).nullable().optional().describe("Model redirect rules."),
     active_time_start: TimeOfDaySchema.nullable()
       .optional()

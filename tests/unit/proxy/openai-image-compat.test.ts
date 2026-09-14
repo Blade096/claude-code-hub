@@ -156,11 +156,16 @@ describe("openai-image-compat - generations constraints", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("fails open for gpt-image-2 until the API reference documents its matrix", async () => {
+  it.each([
+    "gpt-image-2",
+    "gpt-image-2.5",
+    "gpt-image-2.5-flare",
+    "gpt-image-2.5-sunburst",
+  ])("passes through %s generations until its API matrix is documented", async (model) => {
     const result = await validateOpenAIImageRequest({
       pathname: "/v1/images/generations",
       body: {
-        model: "gpt-image-2",
+        model,
         prompt: "otter",
         background: "transparent",
         output_format: "png",
@@ -297,6 +302,45 @@ describe("openai-image-compat - edits constraints", () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  it.each([
+    ["gpt-image-2.5-flare", "high"],
+    ["gpt-image-2.5-sunburst", "xhigh"],
+    ["gpt-image-2.5", "max"],
+  ])("passes through %s multipart edits with quality=%s", async (model, quality) => {
+    const metadata = await createMultipartMetadata({
+      pathname: "/v1/images/edits",
+      fields: [
+        ["model", model],
+        ["prompt", "edit this"],
+        ["quality", quality],
+      ],
+      files: [["image[]", createPngFile("source.png", 32, 32)]],
+    });
+
+    const result = await validateOpenAIImageRequest({
+      pathname: "/v1/images/edits",
+      body: {},
+      imageRequestMetadata: metadata,
+    });
+
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("passes through gpt-image-2.5 JSON edits with provider-defined parameters", async () => {
+    const result = await validateOpenAIImageRequest({
+      pathname: "/v1/images/edits",
+      body: {
+        model: "gpt-image-2.5-flare",
+        prompt: "edit this",
+        images: [{ file_id: "file-1" }],
+        quality: "max",
+        size: "2048x2048",
+      },
+    });
+
+    expect(result).toEqual({ ok: true });
   });
 });
 

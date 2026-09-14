@@ -43,6 +43,12 @@ const EDIT_GPT_MODELS = new Set([
   "gpt-image-1.5",
   "chatgpt-image-latest",
 ]);
+const PASSTHROUGH_GPT_MODELS = new Set([
+  "gpt-image-2",
+  "gpt-image-2.5",
+  "gpt-image-2.5-flare",
+  "gpt-image-2.5-sunburst",
+]);
 const VARIATION_MODEL = "dall-e-2";
 
 const GPT_ONLY_GENERATION_PARAMS = new Set([
@@ -167,7 +173,15 @@ function success(): OpenAIImageValidationResult {
 }
 
 function isGptImageModel(model: string): boolean {
-  return GENERATION_GPT_MODELS.has(model) || EDIT_GPT_MODELS.has(model);
+  return (
+    GENERATION_GPT_MODELS.has(model) ||
+    EDIT_GPT_MODELS.has(model) ||
+    PASSTHROUGH_GPT_MODELS.has(model)
+  );
+}
+
+function shouldPassThroughGptModelValidation(model: string | null): boolean {
+  return model !== null && PASSTHROUGH_GPT_MODELS.has(model);
 }
 
 function getKnownModelFamily(
@@ -277,7 +291,7 @@ function validateGenerationsRequest(body: Record<string, unknown>): OpenAIImageV
   }
 
   const model = parseString(body.model);
-  if (model === "gpt-image-2") {
+  if (shouldPassThroughGptModelValidation(model)) {
     return success();
   }
 
@@ -505,7 +519,7 @@ function validateEditsJsonRequest(body: Record<string, unknown>): OpenAIImageVal
     if (!maskResult.ok) return maskResult;
   }
 
-  if (model === "gpt-image-2") {
+  if (shouldPassThroughGptModelValidation(model)) {
     return success();
   }
 
@@ -700,7 +714,7 @@ async function validateEditsMultipartRequest(
     return fail("Invalid request: multipart /images/edits accepts at most one mask field.");
   }
 
-  if (model === "gpt-image-2") {
+  if (shouldPassThroughGptModelValidation(model)) {
     return success();
   }
 

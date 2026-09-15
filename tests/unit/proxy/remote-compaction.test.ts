@@ -158,6 +158,7 @@ describe("compaction summary input", () => {
     expect(JSON.stringify(result[1])).toContain("older summary");
     expect(JSON.stringify(result[2])).toContain("recent");
     expect(JSON.stringify(result.at(-1))).toContain(COMPACTION_SUMMARY_INSTRUCTION.slice(0, 20));
+    expect(JSON.stringify(result.at(-1))).toContain("不要调用任何工具");
     expect(JSON.stringify(result)).not.toContain("compaction_trigger");
   });
 

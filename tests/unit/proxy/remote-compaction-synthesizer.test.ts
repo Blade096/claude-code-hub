@@ -63,6 +63,8 @@ function makeSession(options: { remoteCompactionV2: boolean; trackUsage?: boolea
       instructions: "you are codex",
       prompt_cache_key: "cache-key-1",
       tools: [{ type: "function", name: "exec_command" }],
+      tool_choice: "auto",
+      parallel_tool_calls: true,
       input: [
         { type: "message", role: "user", content: [{ type: "input_text", text: "do the thing" }] },
         { type: "compaction_trigger" },
@@ -223,12 +225,14 @@ describe("remote compaction synthesis", () => {
   it("emits exactly one compaction item followed by response.completed", async () => {
     const { session } = makeSession({ remoteCompactionV2: true });
     sendMock.mockImplementation(async (s: ProxySession) => {
-      // The summary call must be non-streaming, tool-less and trigger-free.
+      // The summary call must be non-streaming and trigger-free.
       const body = s.request.message as Record<string, unknown>;
       expect(body.stream).toBe(false);
       // 保留 tools 与 prompt_cache_key 是为了让摘要请求命中同一份前缀缓存
       expect(body.tools).toEqual([{ type: "function", name: "exec_command" }]);
       expect(body.prompt_cache_key).toBe("cache-key-1");
+      expect(body.tool_choice).toBe("auto");
+      expect(body.parallel_tool_calls).toBe(true);
       expect(JSON.stringify(body.input)).not.toContain("compaction_trigger");
       return new Response(
         JSON.stringify({
@@ -270,6 +274,30 @@ describe("remote compaction synthesis", () => {
     >;
     expect(usage.input_tokens).toBe(120);
     expect(usage.output_tokens).toBe(40);
+  });
+
+  it("does not invent tool selection settings when the original request omits them", async () => {
+    const { session } = makeSession({ remoteCompactionV2: true });
+    const originalBody = session.request.message as Record<string, unknown>;
+    delete originalBody.tool_choice;
+    delete originalBody.parallel_tool_calls;
+
+    sendMock.mockImplementation(async (s: ProxySession) => {
+      const body = s.request.message as Record<string, unknown>;
+      expect(body).not.toHaveProperty("tool_choice");
+      expect(body).not.toHaveProperty("parallel_tool_calls");
+      return new Response(
+        JSON.stringify({
+          output: [{ type: "message", content: [{ type: "output_text", text: "summary" }] }],
+          usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    });
+
+    const response = await tryRemoteCompactionSynthesis(session);
+    expect(response).not.toBeNull();
+    await response!.text();
   });
 
   it("normalizes cached input and bills a synthesized compaction request", async () => {

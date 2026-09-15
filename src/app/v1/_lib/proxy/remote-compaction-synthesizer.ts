@@ -38,9 +38,10 @@ const SUMMARY_TIMEOUT_MS = 120_000;
  * 是否把原请求的 tools 一起发给摘要模型。
  *
  * Responses 的 prompt cache 前缀包含 tools，去掉 tools 会让前缀整体变化，
- * 大概率拿不到缓存命中；但保留 tools 时模型有极小概率仍然输出工具调用（已用
- * tool_choice: "none" 抑制）。若某个上游对此不适应，把这里改成 false 即可回到
- * Codex 本地压缩的形态（只发 instructions + 历史）。
+ * 大概率拿不到缓存命中；但保留 tools 时模型有极小概率仍然输出工具调用（摘要末尾
+ * 的纯文本指令负责抑制）。若某个上游对此不适应，把这里改成 false 即可回到
+ * Codex 本地压缩的形态（只发 instructions + 历史）。工具选择配置必须沿用原请求，
+ * 否则部分上游会在工具段之前切断 prompt cache 前缀。
  */
 const PRESERVE_TOOLS_FOR_PROMPT_CACHE = true;
 
@@ -235,12 +236,16 @@ async function produceCompactionResult(
     input: buildCompactionSummaryInput(requestBody.input),
     tools:
       PRESERVE_TOOLS_FOR_PROMPT_CACHE && Array.isArray(requestBody.tools) ? requestBody.tools : [],
-    tool_choice: "none",
-    parallel_tool_calls: false,
     stream: false,
     store: false,
     max_output_tokens: SUMMARY_MAX_OUTPUT_TOKENS,
   };
+  if ("tool_choice" in requestBody) {
+    summaryBody.tool_choice = requestBody.tool_choice;
+  }
+  if ("parallel_tool_calls" in requestBody) {
+    summaryBody.parallel_tool_calls = requestBody.parallel_tool_calls;
+  }
   if (typeof requestBody.instructions === "string" && requestBody.instructions.trim()) {
     summaryBody.instructions = requestBody.instructions;
   }

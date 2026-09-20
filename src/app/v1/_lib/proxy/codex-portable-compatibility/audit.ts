@@ -105,7 +105,10 @@ export function markPortableResponseSucceeded(metadata: PortableTransformationMe
 }
 
 export function markPortableUpstreamResponseFailed(metadata: PortableTransformationMetadata): void {
+  metadata.responseRestore = "not_needed";
   metadata.audit.state = "failed";
+  metadata.audit.actualTransport ??= metadata.audit.requestedTransport;
+  metadata.audit.responseRestore = "not_needed";
   metadata.audit.errorCategory = null;
 }
 

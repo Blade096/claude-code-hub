@@ -3,6 +3,7 @@ export {
   markPortableResponseFailed,
   markPortableResponseStarted,
   markPortableResponseSucceeded,
+  markPortableUpstreamResponseFailed,
   portableAuditCorrelation,
   recordPortableFailureAudit,
   requestedPortableTransport,

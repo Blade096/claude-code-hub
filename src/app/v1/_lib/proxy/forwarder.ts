@@ -66,6 +66,7 @@ import { bindClientAbortListener } from "./client-abort-listener";
 import { deriveClientSafeUpstreamErrorMessage } from "./client-error-message";
 import {
   isPortableCompatibilityError,
+  markPortableUpstreamResponseFailed,
   PortableCompatibilityError,
   preparePortableCompatibilityRequest,
 } from "./codex-portable-compatibility";
@@ -1739,6 +1740,11 @@ export class ProxyForwarder {
         } catch (error) {
           lastError = error as Error;
 
+          const portableMetadata = session.getPortableTransformationMetadata?.() ?? null;
+          if (portableMetadata && !isPortableCompatibilityError(lastError)) {
+            markPortableUpstreamResponseFailed(portableMetadata);
+            await persistSpecialSettings(session);
+          }
           session.clearPortableTransformationMetadata?.();
           if (isPortableCompatibilityError(lastError)) {
             throw lastError;
@@ -4307,6 +4313,11 @@ export class ProxyForwarder {
 
       lastError = error;
 
+      const portableMetadata = attempt.session.getPortableTransformationMetadata?.() ?? null;
+      if (portableMetadata && !isPortableCompatibilityError(error)) {
+        markPortableUpstreamResponseFailed(portableMetadata);
+        await persistSpecialSettings(attempt.session);
+      }
       attempt.session.clearPortableTransformationMetadata?.();
       if (isPortableCompatibilityError(error)) {
         attempt.settled = true;

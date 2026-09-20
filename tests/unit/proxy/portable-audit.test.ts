@@ -3,6 +3,7 @@ import {
   markPortableResponseFailed,
   markPortableResponseStarted,
   markPortableResponseSucceeded,
+  markPortableUpstreamResponseFailed,
   recordPortableFailureAudit,
 } from "@/app/v1/_lib/proxy/codex-portable-compatibility/audit";
 import { PortableCompatibilityError } from "@/app/v1/_lib/proxy/codex-portable-compatibility/errors";
@@ -108,6 +109,25 @@ describe("portable compatibility audit", () => {
       state: "failed",
       responseRestore: "failed",
       errorCategory: "compatibility_restore_failed",
+    });
+  });
+
+  test("records an upstream attempt failure before response restoration starts", () => {
+    const audit = createPortableCompatibilityAudit({
+      session: makeSession(true),
+      provider,
+      transformations: ["agent_message_input"],
+    });
+    const state = metadata(audit);
+
+    markPortableUpstreamResponseFailed(state);
+
+    expect(state.responseRestore).toBe("not_needed");
+    expect(audit).toMatchObject({
+      actualTransport: "sse",
+      state: "failed",
+      responseRestore: "not_needed",
+      errorCategory: null,
     });
   });
 

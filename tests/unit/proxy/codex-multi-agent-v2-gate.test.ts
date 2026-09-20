@@ -84,6 +84,17 @@ describe("Codex MultiAgentV2 provider gate", () => {
         ],
       })
     ).toBe(false);
+    expect(
+      hasCodexMultiAgentV2ToolSchema({
+        tools: [
+          {
+            type: "namespace",
+            name: "collaboration",
+            tools: [{ type: "function", name: "ordinary_business_tool" }],
+          },
+        ],
+      })
+    ).toBe(false);
   });
 
   test("fails closed for malformed collaboration schemas from official Codex Responses", async () => {
@@ -98,6 +109,22 @@ describe("Codex MultiAgentV2 provider gate", () => {
       category: "compatibility_client_or_protocol_mismatch",
       providerId: 42,
     });
+    expect(mocks.getCachedSystemSettings).not.toHaveBeenCalled();
+  });
+
+  test("fails closed when valid and malformed collaboration namespaces are mixed", async () => {
+    const malformed = { ...collaborationNamespace(), tools: "invalid" };
+    const session = createSession("portable", {
+      tools: [collaborationNamespace()],
+      input: [{ type: "additional_tools", tools: [malformed] }],
+    });
+
+    await expect(ProxyCodexMultiAgentV2Gate.ensure(session)).rejects.toMatchObject({
+      compatibilityCode: "client_or_protocol_mismatch",
+      category: "compatibility_client_or_protocol_mismatch",
+      providerId: 42,
+    });
+    expect(hasCodexMultiAgentV2ToolSchema(session.request.message)).toBe(false);
     expect(mocks.getCachedSystemSettings).not.toHaveBeenCalled();
   });
 

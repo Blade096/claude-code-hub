@@ -134,6 +134,23 @@ function normalizeSnapshotHeaders(
   return Object.keys(normalized).length > 0 ? normalized : null;
 }
 
+function serializeResponseForStorage(
+  response: string | object,
+  options: { storeMessages: boolean; portableCompatibility?: boolean }
+): string {
+  if (options.storeMessages) {
+    return typeof response === "string" ? response : JSON.stringify(response);
+  }
+  if (typeof response === "object") {
+    return JSON.stringify(redactResponseBody(response));
+  }
+  try {
+    return JSON.stringify(redactResponseBody(JSON.parse(response) as unknown));
+  } catch {
+    return options.portableCompatibility ? redactResponseText(response) : response;
+  }
+}
+
 function parseJsonStringIfPossible(value: unknown): unknown {
   if (typeof value !== "string") return value;
 
@@ -1556,25 +1573,10 @@ export class SessionManager {
     if (!redis || redis.status !== "ready") return;
 
     try {
-      let responseString: string;
-
-      if (SessionManager.STORE_MESSAGES) {
-        // 原样存储
-        responseString = typeof response === "string" ? response : JSON.stringify(response);
-      } else {
-        // 尝试解析 JSON 并脱敏
-        if (typeof response === "object") {
-          responseString = JSON.stringify(redactResponseBody(response));
-        } else {
-          try {
-            responseString = JSON.stringify(redactResponseBody(JSON.parse(response) as unknown));
-          } catch {
-            responseString = options.portableCompatibility
-              ? redactResponseText(response)
-              : response;
-          }
-        }
-      }
+      const responseString = serializeResponseForStorage(response, {
+        storeMessages: SessionManager.STORE_MESSAGES,
+        portableCompatibility: options.portableCompatibility,
+      });
 
       // 新格式：session:{sessionId}:req:{sequence}:response（独立存储每个请求）
       // 旧格式：session:{sessionId}:response（向后兼容）
@@ -2152,23 +2154,13 @@ export class SessionManager {
         if (!getEnvConfig().STORE_SESSION_RESPONSE_BODY) {
           // 与旧平铺 response 字段保持同一隐私/存储契约：关闭时跳过任何 response body phase 落盘。
         } else {
-          let bodyToStore = snapshot.body ?? null;
-
-          if (!SessionManager.STORE_MESSAGES) {
-            if (typeof bodyToStore === "string") {
-              try {
-                bodyToStore = JSON.stringify(
-                  redactResponseBody(JSON.parse(bodyToStore) as unknown)
-                );
-              } catch {
-                if (options.portableCompatibility) bodyToStore = redactResponseText(bodyToStore);
-              }
-            } else if (bodyToStore !== null) {
-              bodyToStore = JSON.stringify(redactResponseBody(bodyToStore));
-            }
-          } else if (bodyToStore !== null && typeof bodyToStore !== "string") {
-            bodyToStore = JSON.stringify(bodyToStore);
-          }
+          const bodyToStore =
+            snapshot.body == null
+              ? null
+              : serializeResponseForStorage(snapshot.body, {
+                  storeMessages: SessionManager.STORE_MESSAGES,
+                  portableCompatibility: options.portableCompatibility,
+                });
 
           if (bodyToStore !== null) {
             writes.push(

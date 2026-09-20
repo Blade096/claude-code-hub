@@ -290,4 +290,40 @@ describe("SessionManager - Redaction based on STORE_SESSION_MESSAGES", () => {
       expect(stored.content[0].text).toBe("[REDACTED]");
     });
   });
+
+  describe("storeSessionResponsePhaseSnapshot", () => {
+    it("shares portable-only SSE redaction and explicit full payload semantics", async () => {
+      const sentinel = "PORTABLE_PHASE_SENTINEL_61D2";
+      const response = `data: ${sentinel}\n\n`;
+
+      await SessionManager.storeSessionResponsePhaseSnapshot(
+        "sess_ordinary",
+        "after",
+        { body: response },
+        1
+      );
+      expect(redisMock.setex.mock.calls[0][2]).toBe(response);
+
+      vi.clearAllMocks();
+      await SessionManager.storeSessionResponsePhaseSnapshot(
+        "sess_portable",
+        "after",
+        { body: response },
+        1,
+        { portableCompatibility: true }
+      );
+      expect(redisMock.setex.mock.calls[0][2]).not.toContain(sentinel);
+
+      vi.clearAllMocks();
+      mockStoreMessages = true;
+      await SessionManager.storeSessionResponsePhaseSnapshot(
+        "sess_full",
+        "after",
+        { body: response },
+        1,
+        { portableCompatibility: true }
+      );
+      expect(redisMock.setex.mock.calls[0][2]).toContain(sentinel);
+    });
+  });
 });

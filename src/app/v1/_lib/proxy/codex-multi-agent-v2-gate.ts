@@ -32,34 +32,53 @@ function hasEncryptedMessageParameter(tool: unknown): boolean {
 function classifyCollaborationNamespace(tools: unknown): CollaborationSchemaClassification {
   if (!Array.isArray(tools)) return "absent";
 
-  let foundCollaborationNamespace = false;
+  let foundValidNamespace = false;
+  let foundMalformedNamespace = false;
   for (const tool of tools) {
     if (!isRecord(tool)) continue;
     if (tool.type !== "namespace" || tool.name !== CODEX_COLLABORATION_NAMESPACE) continue;
-    foundCollaborationNamespace = true;
-    if (Array.isArray(tool.tools) && tool.tools.some(hasEncryptedMessageParameter)) {
-      return "valid";
+    if (!Array.isArray(tool.tools)) {
+      foundMalformedNamespace = true;
+      continue;
     }
+
+    const collaborationTools = tool.tools.filter(
+      (candidate) =>
+        isRecord(candidate) &&
+        candidate.type === "function" &&
+        typeof candidate.name === "string" &&
+        CODEX_MULTI_AGENT_V2_TOOL_NAMES.has(candidate.name)
+    );
+    if (collaborationTools.length === 0) {
+      foundMalformedNamespace = true;
+      continue;
+    }
+
+    foundValidNamespace = true;
+    foundMalformedNamespace ||= collaborationTools.some(
+      (candidate) => !hasEncryptedMessageParameter(candidate)
+    );
   }
-  return foundCollaborationNamespace ? "malformed" : "absent";
+  if (foundMalformedNamespace) return "malformed";
+  return foundValidNamespace ? "valid" : "absent";
 }
 
 function classifyCodexMultiAgentV2ToolSchema(
   message: Record<string, unknown>
 ): CollaborationSchemaClassification {
   const topLevel = classifyCollaborationNamespace(message.tools);
-  if (topLevel === "valid") return "valid";
-
+  let valid = topLevel === "valid";
   let malformed = topLevel === "malformed";
   if (Array.isArray(message.input)) {
     for (const item of message.input) {
       if (!isRecord(item) || item.type !== "additional_tools") continue;
       const nested = classifyCollaborationNamespace(item.tools);
-      if (nested === "valid") return "valid";
+      valid ||= nested === "valid";
       malformed ||= nested === "malformed";
     }
   }
-  return malformed ? "malformed" : "absent";
+  if (malformed) return "malformed";
+  return valid ? "valid" : "absent";
 }
 
 /**

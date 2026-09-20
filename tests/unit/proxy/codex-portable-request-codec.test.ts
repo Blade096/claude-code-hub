@@ -302,6 +302,24 @@ describe("Codex MultiAgentV2 portable request codec", () => {
       })
     ).rejects.toMatchObject({ compatibilityCode: "name_collision" });
 
+    const customToolCollision = makeRequest({
+      tools: [
+        spawnAgentNamespace(),
+        {
+          type: "custom",
+          name: "spawn_agent",
+          description: "Unrelated business tool",
+        },
+      ],
+    });
+    await expect(
+      preparePortableCompatibilityRequest({
+        session: makeSession(customToolCollision),
+        provider: makeProvider(),
+        request: customToolCollision,
+      })
+    ).rejects.toMatchObject({ compatibilityCode: "name_collision" });
+
     const nestedTargetCollision = makeRequest({
       tools: [
         {

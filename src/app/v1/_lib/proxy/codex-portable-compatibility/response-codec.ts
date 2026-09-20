@@ -1,13 +1,10 @@
 import { PortableCompatibilityError } from "./errors";
+import { isRecord } from "./guards";
 import {
   PORTABLE_COLLABORATION_NAMESPACE,
   type PortableToolIdentityMapping,
   type PortableTransformationMetadata,
 } from "./types";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function findMapping(
   metadata: PortableTransformationMetadata,
@@ -76,7 +73,12 @@ function restoreOutputArray(
   metadata: PortableTransformationMetadata,
   fieldPath: string
 ): number {
-  if (!Array.isArray(output)) return 0;
+  if (!Array.isArray(output)) {
+    throw new PortableCompatibilityError("malformed_response", {
+      fieldPath,
+      providerId: metadata.providerId,
+    });
+  }
   let restored = 0;
   output.forEach((item, index) => {
     if (isRecord(item) && restoreFunctionCall(item, metadata, `${fieldPath}.${index}`)) {
@@ -98,13 +100,25 @@ export function restorePortableCompatibilityPayload(
   }
 
   const restoredPayload = structuredClone(payload);
-  let restoredCount = restoreOutputArray(restoredPayload.output, metadata, "output");
-  if (isRecord(restoredPayload.response)) {
+  let restoredCount = 0;
+  let foundOutput = false;
+  if (Object.hasOwn(restoredPayload, "output")) {
+    restoredCount += restoreOutputArray(restoredPayload.output, metadata, "output");
+    foundOutput = true;
+  }
+  if (isRecord(restoredPayload.response) && Object.hasOwn(restoredPayload.response, "output")) {
     restoredCount += restoreOutputArray(
       restoredPayload.response.output,
       metadata,
       "response.output"
     );
+    foundOutput = true;
+  }
+  if (!foundOutput) {
+    throw new PortableCompatibilityError("malformed_response", {
+      fieldPath: "response.output",
+      providerId: metadata.providerId,
+    });
   }
   return { payload: restoredPayload, restoredCount };
 }

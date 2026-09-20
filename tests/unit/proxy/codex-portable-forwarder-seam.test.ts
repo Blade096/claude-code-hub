@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  provider: null as Provider | null,
   getCachedSystemSettings: vi.fn(async () => ({
     enableCodexMultiAgentV2Compatibility: true,
     enableClaudeMetadataUserIdInjection: false,
@@ -25,6 +26,19 @@ const mocks = vi.hoisted(() => ({
     info: vi.fn(),
     trace: vi.fn(),
     warn: vi.fn(),
+  },
+}));
+
+vi.mock("@/app/v1/_lib/proxy/guard-pipeline", () => ({
+  RequestType: { CHAT: "CHAT", COUNT_TOKENS: "COUNT_TOKENS" },
+  GuardPipelineBuilder: {
+    fromSession: (session: ProxySession) => ({
+      run: vi.fn(async () => {
+        session.setProvider(mocks.provider);
+        session.authState = { success: true, user: null, key: null, apiKey: null };
+        return null;
+      }),
+    }),
   },
 }));
 
@@ -63,10 +77,12 @@ vi.mock("@/app/v1/_lib/proxy/response-fixer", () => ({
 }));
 
 import { resolveEndpointPolicy } from "@/app/v1/_lib/proxy/endpoint-policy";
+import { handleProxyRequest } from "@/app/v1/_lib/proxy-handler";
 import { ProxyForwarder } from "@/app/v1/_lib/proxy/forwarder";
 import { ProxyResponseHandler } from "@/app/v1/_lib/proxy/response-handler";
 import { ProxySession } from "@/app/v1/_lib/proxy/session";
 import type { Provider } from "@/types/provider";
+import { Hono } from "hono";
 
 function spawnAgentNamespace() {
   return {
@@ -187,6 +203,7 @@ describe("portable compatibility proxy seams", () => {
       enableClaudeMetadataUserIdInjection: false,
       enableBillingHeaderRectifier: false,
     });
+    mocks.provider = null;
   });
 
   test("sends portable payload to mock upstream and restores the response in dispatch", async () => {
@@ -262,6 +279,78 @@ describe("portable compatibility proxy seams", () => {
       (loggerMethod) => loggerMethod.mock.calls
     );
     expect(JSON.stringify(loggedArguments)).not.toContain("Complete the seam test task");
+  });
+
+  test("transforms and restores through the /v1/responses proxy boundary", async () => {
+    const provider = makeProvider();
+    mocks.provider = provider;
+    let upstreamBody: Record<string, unknown> | null = null;
+    vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode").mockImplementationOnce(
+      async (_url: string, init: RequestInit) => {
+        upstreamBody = JSON.parse(bodyText(init.body));
+        return new Response(
+          JSON.stringify({
+            id: "resp_boundary",
+            output: [
+              {
+                type: "function_call",
+                call_id: "call_boundary",
+                namespace: "collaboration-optimize",
+                name: "spawn_agent",
+                arguments: JSON.stringify({ message: "child task" }),
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+    );
+    vi.spyOn(ProxyResponseHandler as never, "handleNonStream").mockImplementationOnce(
+      async (_session: ProxySession, response: Response) => response
+    );
+
+    const app = new Hono();
+    app.post("/v1/responses", handleProxyRequest);
+    const response = await app.request("/v1/responses", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer proxy-key",
+        "content-type": "application/json",
+        "user-agent": "Codex Desktop/1.2.3",
+      },
+      body: JSON.stringify({
+        model: "third-party-model",
+        stream: false,
+        tools: [spawnAgentNamespace()],
+        input: [
+          {
+            type: "agent_message",
+            content: [
+              { type: "input_text", text: "Payload:\n" },
+              { type: "encrypted_content", encrypted_content: "Run the boundary task." },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(response.status, await response.clone().text()).toBe(200);
+    expect(upstreamBody).toMatchObject({
+      tools: [{ name: "collaboration-optimize" }],
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_text", text: "Payload:\n" },
+            { type: "input_text", text: "Run the boundary task." },
+          ],
+        },
+      ],
+    });
+    await expect(response.json()).resolves.toMatchObject({
+      output: [{ namespace: "collaboration", name: "spawn_agent" }],
+    });
   });
 
   test("fatal compatibility errors neither reach upstream nor select another Provider", async () => {

@@ -3,6 +3,7 @@ import type { Provider } from "@/types/provider";
 import { isCodexMultiAgentV2Request } from "../codex-multi-agent-v2-gate";
 import type { ProxySession } from "../session";
 import { PortableCompatibilityError } from "./errors";
+import { isRecord } from "./guards";
 import {
   PORTABLE_COLLABORATION_NAMESPACE,
   type PortablePreparation,
@@ -22,10 +23,6 @@ type ToolContainer = {
   tools: unknown[];
   path: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function collectToolContainers(request: Record<string, unknown>): ToolContainer[] {
   const containers: ToolContainer[] = [];
@@ -66,7 +63,7 @@ function assertNoReservedToolCollision(
       providerId,
     });
   }
-  if (tool.type === "function" && tool.name === SUPPORTED_TOOL_NAME) {
+  if (tool.name === SUPPORTED_TOOL_NAME) {
     throw new PortableCompatibilityError("name_collision", {
       fieldPath: `${path}.name`,
       providerId,

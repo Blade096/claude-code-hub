@@ -167,4 +167,14 @@ describe("Codex MultiAgentV2 portable response codec", () => {
       )
     ).rejects.toMatchObject({ compatibilityCode: "malformed_response" });
   });
+
+  test.each([
+    ["missing output", { id: "resp_1" }],
+    ["non-array output", { id: "resp_1", output: {} }],
+    ["nested non-array output", { response: { output: null } }],
+  ])("fails closed on %s", (_label, payload) => {
+    expect(() => restorePortableCompatibilityPayload(payload, metadata())).toThrowError(
+      PortableCompatibilityError
+    );
+  });
 });

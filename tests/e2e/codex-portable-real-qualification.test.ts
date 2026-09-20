@@ -19,7 +19,7 @@ import {
   fetchUsageLogs,
   lifecycleCaseForRecovery,
   requireQualification,
-  terminalAudit,
+  targetTerminalAudit,
   usageItems,
   validateHttpNonStream,
   validateSuccessfulLifecycle,
@@ -140,17 +140,23 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
               ? { targetIdleTimeoutMs: 250 }
               : { targetModel: target.upstreamErrorModel ?? undefined };
         const fault = await executeLifecycle(qualification, invocation, caseInfo, faultOptions);
+        const faultModel = faultOptions.targetModel ?? target.model;
+        const faultAudit = targetTerminalAudit(
+          fault.audits,
+          target,
+          faultModel,
+          caseInfo.operation === "upstream_error"
+        );
+        requireQualification(
+          faultAudit?.state === "failed",
+          caseInfo.caseId,
+          "the injected fault did not produce a failed audit for the target child Provider"
+        );
         if (caseInfo.operation === "cancellation") {
           requireQualification(
             fault.cancelled && !fault.timedOut,
             caseInfo.caseId,
             "Codex process was not cancelled after the child spawn event"
-          );
-        } else {
-          requireQualification(
-            fault.audits.some((item) => item.state === "failed") || fault.run.failed,
-            caseInfo.caseId,
-            "the injected fault did not fail"
           );
         }
 
@@ -187,7 +193,7 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
           buildEvidence({
             caseInfo,
             config: qualification,
-            audit: terminalAudit(fault.audits) ?? fault.audits.at(-1) ?? null,
+            audit: faultAudit,
             run: fault.run,
             result: "passed",
           }),

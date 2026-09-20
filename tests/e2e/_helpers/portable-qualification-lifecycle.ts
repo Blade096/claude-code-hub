@@ -180,7 +180,9 @@ export async function executeLifecycle(
     options.targetModel ?? target.model,
     startedAt,
     sentinels,
-    caseInfo.expected === "success" ? 2 : 1
+    caseInfo.expected === "success" ? 2 : 1,
+    true,
+    caseInfo.operation === "upstream_error"
   );
   return {
     run,

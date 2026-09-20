@@ -70,7 +70,8 @@ export async function assertOperationalLogsClean(
 export function isTargetChildAudit(
   audit: PortableAudit,
   target: QualificationProvider,
-  targetModel: string
+  targetModel: string,
+  allowActualModelMismatch = false
 ): boolean {
   return (
     audit.requestedProviderId === target.id &&
@@ -78,9 +79,25 @@ export function isTargetChildAudit(
     audit.actualProviderId === target.id &&
     audit.actualProviderName === target.name &&
     audit.requestedModel === targetModel &&
-    audit.actualModel === targetModel &&
+    (allowActualModelMismatch || audit.actualModel === targetModel) &&
     audit.transformations.includes("agent_message_input") &&
     !audit.transformations.includes("collaboration_namespace")
+  );
+}
+
+export function targetTerminalAudit(
+  audits: PortableAudit[],
+  target: QualificationProvider,
+  targetModel: string,
+  allowActualModelMismatch = false
+): PortableAudit | null {
+  const targetAudits = audits.filter((item) =>
+    isTargetChildAudit(item, target, targetModel, allowActualModelMismatch)
+  );
+  return (
+    targetAudits.find((item) => item.state === "failed") ??
+    targetAudits.find((item) => item.state === "response_restored") ??
+    null
   );
 }
 
@@ -91,7 +108,9 @@ export async function inspectPortableAudits(
   targetModel: string,
   startedAt: number,
   protectedValues: string[],
-  minimumRelatedTerminalAudits = 1
+  minimumRelatedTerminalAudits = 1,
+  requireTargetTerminalAudit = false,
+  allowActualModelMismatch = false
 ): Promise<PortableAudit[]> {
   const sessionIds = [run.threadId, ...run.relatedThreadIds].filter((value): value is string =>
     Boolean(value)
@@ -117,10 +136,10 @@ export async function inspectPortableAudits(
       (item) => item.state === "response_restored" || item.state === "failed"
     );
     const relatedTerminal = terminal.filter((item) =>
-      isTargetChildAudit(item, target, targetModel)
+      isTargetChildAudit(item, target, targetModel, allowActualModelMismatch)
     );
     if (
-      run.relatedThreadIds.length > 0
+      requireTargetTerminalAudit
         ? relatedTerminal.length >= minimumRelatedTerminalAudits
         : terminal.length > 0
     ) {

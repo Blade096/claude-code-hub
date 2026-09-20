@@ -23,6 +23,7 @@ import {
 import { buildLifecyclePrompt } from "../../e2e/_helpers/portable-qualification-lifecycle";
 import {
   isTargetChildAudit,
+  targetTerminalAudit,
   usageItemMatchesProvider,
 } from "../../e2e/_helpers/portable-qualification-assertions";
 import { analyzeLifecycleRollouts } from "../../e2e/_helpers/portable-qualification-rollout";
@@ -297,6 +298,37 @@ describe("portable qualification evidence safety", () => {
 
     expect(isTargetChildAudit(child, target, target.model)).toBe(true);
     expect(isTargetChildAudit(root, target, target.model)).toBe(false);
+    expect(targetTerminalAudit([root, child], target, target.model)).toBe(child);
+  });
+
+  test("never accepts a native root failure as the target child fault", () => {
+    const target = config.deepseek;
+    const rootFailure = audit({
+      state: "failed",
+      requestedProviderId: config.native.id,
+      requestedProviderName: config.native.name,
+      actualProviderId: config.native.id,
+      actualProviderName: config.native.name,
+      requestedModel: config.native.model,
+      actualModel: config.native.model,
+      transformations: ["collaboration_namespace"],
+    });
+    const redirectedChildFailure = audit({
+      state: "failed",
+      requestedModel: target.upstreamErrorModel,
+      actualModel: "provider-invalid-model",
+      transformations: ["agent_message_input"],
+    });
+
+    expect(targetTerminalAudit([rootFailure], target, target.model)).toBeNull();
+    expect(
+      targetTerminalAudit(
+        [rootFailure, redirectedChildFailure],
+        target,
+        target.upstreamErrorModel!,
+        true
+      )
+    ).toBe(redirectedChildFailure);
   });
 
   test("parses safe status and usage without retaining tool prompts", () => {

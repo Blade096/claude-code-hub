@@ -473,6 +473,13 @@ export async function restorePortableCompatibilityResponse(
   lifecycle: { onFinalize?: () => void; acceptLanguage?: string | null } = {}
 ): Promise<Response> {
   markPortableResponseStarted(metadata, response);
+  if (!response.ok) {
+    metadata.responseRestore = "not_needed";
+    metadata.audit.responseRestore = "not_needed";
+    markPortableUpstreamResponseFailed(metadata);
+    lifecycle.onFinalize?.();
+    return response;
+  }
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (contentType.includes("text/event-stream")) {
     const state = createPortableResponseRestoreState();

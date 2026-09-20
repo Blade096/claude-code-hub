@@ -358,6 +358,34 @@ describe("Codex MultiAgentV2 portable response codec", () => {
     expect(JSON.stringify(state.audit)).not.toContain("delegated task");
   });
 
+  test("preserves an upstream HTTP error and records a terminal failed audit", async () => {
+    const state = metadata();
+    state.toolMappings = [];
+    state.transformations = ["agent_message_input"];
+    state.audit.transformations = ["agent_message_input"];
+    let finalized = false;
+    const response = await restorePortableCompatibilityResponse(
+      new Response('{"error":{"message":"invalid model"}}', {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      }),
+      state,
+      { onFinalize: () => (finalized = true) }
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: { message: "invalid model" } });
+    expect(finalized).toBe(true);
+    expect(state.responseRestore).toBe("not_needed");
+    expect(state.audit).toMatchObject({
+      state: "failed",
+      actualTransport: "http",
+      responseRestore: "not_needed",
+      errorCategory: null,
+      responseId: null,
+    });
+  });
+
   test("fails closed on non-JSON and invalid JSON responses", async () => {
     const nonJsonState = metadata();
     await expect(

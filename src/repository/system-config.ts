@@ -160,6 +160,7 @@ function createFallbackSettings(): SystemSettings {
     passThroughUpstreamErrorMessage: true,
     enableHttp2: false,
     enableOpenaiResponsesWebsocket: true,
+    enableCodexMultiAgentV2Compatibility: false,
     enableHighConcurrencyMode: false,
     interceptAnthropicWarmupRequests: false,
     enableThinkingSignatureRectifier: true,
@@ -265,6 +266,14 @@ const RECENT_COLUMN_LADDER: ReadonlyArray<{
   updateWarn: string;
 }> = [
   {
+    key: "enableCodexMultiAgentV2Compatibility",
+    column: systemSettings.enableCodexMultiAgentV2Compatibility,
+    selectWarn:
+      "system_settings 表除 enableCodexMultiAgentV2Compatibility 外仍有列缺失，继续回退到上一代字段集。",
+    updateWarn:
+      "system_settings 表除 enableCodexMultiAgentV2Compatibility 外仍有列缺失，继续降级更新。",
+  },
+  {
     key: "enableGeminiFunctionIdRectifier",
     column: systemSettings.enableGeminiFunctionIdRectifier,
     selectWarn:
@@ -325,6 +334,7 @@ const PASS_THROUGH_ERA_OMIT: readonly string[] = [
   "passThroughUpstreamErrorMessage",
   "fakeStreamingWhitelist",
   "enableOpenaiResponsesWebsocket",
+  "enableCodexMultiAgentV2Compatibility",
 ];
 const HIGH_CONCURRENCY_ERA_OMIT: readonly string[] = [
   ...PASS_THROUGH_ERA_OMIT,
@@ -662,6 +672,10 @@ export async function updateSystemSettings(
     // OpenAI Responses WebSocket 开关（如果提供）
     if (payload.enableOpenaiResponsesWebsocket !== undefined) {
       updates.enableOpenaiResponsesWebsocket = payload.enableOpenaiResponsesWebsocket;
+    }
+
+    if (payload.enableCodexMultiAgentV2Compatibility !== undefined) {
+      updates.enableCodexMultiAgentV2Compatibility = payload.enableCodexMultiAgentV2Compatibility;
     }
 
     // 高并发模式开关（如果提供）

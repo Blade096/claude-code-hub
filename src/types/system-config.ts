@@ -76,6 +76,9 @@ export interface SystemSettings {
   // 上游不支持时优雅降级为 HTTP，客户端 WebSocket 保持打开。
   enableOpenaiResponsesWebsocket: boolean;
 
+  // Codex MultiAgentV2 portable compatibility 总开关（默认关闭）
+  enableCodexMultiAgentV2Compatibility: boolean;
+
   // 高并发模式（默认关闭）
   // 目标：关闭部分 Redis 调试快照与实时观测写入，降低高并发下的 CPU 与 IO 开销
   enableHighConcurrencyMode: boolean;
@@ -193,6 +196,9 @@ export interface UpdateSystemSettingsInput {
 
   // 启用 OpenAI Responses WebSocket 支持（可选，仅 Codex 类型供应商生效）
   enableOpenaiResponsesWebsocket?: boolean;
+
+  // Codex MultiAgentV2 portable compatibility 总开关（可选）
+  enableCodexMultiAgentV2Compatibility?: boolean;
 
   // 高并发模式（可选）
   enableHighConcurrencyMode?: boolean;

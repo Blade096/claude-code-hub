@@ -7,6 +7,7 @@ import type {
   AnthropicMaxTokensPreference,
   AnthropicThinkingBudgetPreference,
   CodexImageGenerationPreference,
+  CodexMultiAgentV2Mode,
   CodexParallelToolCallsPreference,
   CodexReasoningEffortPreference,
   CodexReasoningSummaryPreference,
@@ -54,6 +55,7 @@ export interface RoutingState {
   disableSessionReuse: boolean;
   // 是否由 CCH 代该供应商合成 Codex 远程压缩摘要
   remoteCompactionV2: boolean;
+  codexMultiAgentV2Mode: CodexMultiAgentV2Mode;
   modelRedirects: ProviderModelRedirectRule[];
   allowedModels: AllowedModelRule[];
   allowedClients: string[];
@@ -151,6 +153,7 @@ export type ProviderFormAction =
   | { type: "SET_PRESERVE_CLIENT_IP"; payload: boolean }
   | { type: "SET_DISABLE_SESSION_REUSE"; payload: boolean }
   | { type: "SET_REMOTE_COMPACTION_V2"; payload: boolean }
+  | { type: "SET_CODEX_MULTI_AGENT_V2_MODE"; payload: CodexMultiAgentV2Mode }
   | { type: "SET_MODEL_REDIRECTS"; payload: ProviderModelRedirectRule[] }
   | { type: "SET_ALLOWED_MODELS"; payload: AllowedModelRule[] }
   | { type: "SET_ALLOWED_CLIENTS"; payload: string[] }

@@ -48,6 +48,16 @@
       "label": "远程压缩替代（Codex）",
       "desc": "开启后，Codex 的长会话压缩由本站用该供应商自己的模型生成摘要，再按 Responses 压缩协议回给客户端。适用于上游不支持压缩协议的情况，例如 DeepSeek 一类中转。"
     },
+    "codexMultiAgentV2Mode": {
+      "label": "Codex MultiAgentV2 兼容模式",
+      "desc": "选择此供应商处理 Codex MultiAgentV2 协作请求的方式。",
+      "options": {
+        "native": "原生协议",
+        "portable": "Portable 兼容",
+        "disabled": "禁用"
+      },
+      "portableWarning": "委派任务正文会以明文经过 CCH 和第三方供应商，同时还需要开启系统总开关。"
+    },
     "options": {
       "title": "选项",
       "desc": "附加供应商选项和覆写设置"

@@ -36,6 +36,7 @@ const DEFAULT_SETTINGS: Pick<
   SystemSettings,
   | "enableHttp2"
   | "enableOpenaiResponsesWebsocket"
+  | "enableCodexMultiAgentV2Compatibility"
   | "enableHighConcurrencyMode"
   | "interceptAnthropicWarmupRequests"
   | "codexPriorityBillingSource"
@@ -57,6 +58,7 @@ const DEFAULT_SETTINGS: Pick<
 > = {
   enableHttp2: false,
   enableOpenaiResponsesWebsocket: true,
+  enableCodexMultiAgentV2Compatibility: false,
   enableHighConcurrencyMode: false,
   interceptAnthropicWarmupRequests: false,
   codexPriorityBillingSource: "requested",
@@ -148,6 +150,7 @@ export async function getCachedSystemSettings(): Promise<SystemSettings> {
       enableClientVersionCheck: false,
       enableHttp2: DEFAULT_SETTINGS.enableHttp2,
       enableOpenaiResponsesWebsocket: DEFAULT_SETTINGS.enableOpenaiResponsesWebsocket,
+      enableCodexMultiAgentV2Compatibility: DEFAULT_SETTINGS.enableCodexMultiAgentV2Compatibility,
       enableHighConcurrencyMode: DEFAULT_SETTINGS.enableHighConcurrencyMode,
       interceptAnthropicWarmupRequests: DEFAULT_SETTINGS.interceptAnthropicWarmupRequests,
       enableThinkingSignatureRectifier: DEFAULT_SETTINGS.enableThinkingSignatureRectifier,

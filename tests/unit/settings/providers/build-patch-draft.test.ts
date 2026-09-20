@@ -15,6 +15,7 @@ function createBatchState(): ProviderFormState {
       preserveClientIp: false,
       disableSessionReuse: false,
       remoteCompactionV2: false,
+      codexMultiAgentV2Mode: "native",
       modelRedirects: [],
       allowedModels: [],
       allowedClients: [],
@@ -274,6 +275,16 @@ describe("buildPatchDraftFromFormState", () => {
     const draft = buildPatchDraftFromFormState(state, dirty);
 
     expect(draft.remote_compaction_v2).toEqual({ set: true });
+  });
+
+  it("sets codexMultiAgentV2Mode when dirty", () => {
+    const state = createBatchState();
+    state.routing.codexMultiAgentV2Mode = "portable";
+    const dirty = new Set(["routing.codexMultiAgentV2Mode"]);
+
+    const draft = buildPatchDraftFromFormState(state, dirty);
+
+    expect(draft.codex_multi_agent_v2_mode).toEqual({ set: "portable" });
   });
 
   it("sets swapCacheTtlBilling when dirty", () => {

@@ -621,6 +621,7 @@ function sanitizeProvider(
     preserveClientIp: provider.preserveClientIp,
     disableSessionReuse: provider.disableSessionReuse,
     remoteCompactionV2: provider.remoteCompactionV2,
+    codexMultiAgentV2Mode: provider.codexMultiAgentV2Mode,
     modelRedirects: provider.modelRedirects,
     activeTimeStart: provider.activeTimeStart,
     activeTimeEnd: provider.activeTimeEnd,

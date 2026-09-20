@@ -52,6 +52,9 @@ export function buildPatchDraftFromFormState(
   if (dirtyFields.has("routing.remoteCompactionV2")) {
     draft.remote_compaction_v2 = { set: state.routing.remoteCompactionV2 };
   }
+  if (dirtyFields.has("routing.codexMultiAgentV2Mode")) {
+    draft.codex_multi_agent_v2_mode = { set: state.routing.codexMultiAgentV2Mode };
+  }
   if (dirtyFields.has("routing.activeTimeStart")) {
     if (state.routing.activeTimeStart === null) {
       draft.active_time_start = { clear: true };

@@ -52,6 +52,7 @@ const settings: SystemSettings = {
   passThroughUpstreamErrorMessage: true,
   enableHttp2: false,
   enableOpenaiResponsesWebsocket: true,
+  enableCodexMultiAgentV2Compatibility: false,
   enableHighConcurrencyMode: false,
   interceptAnthropicWarmupRequests: false,
   enableThinkingSignatureRectifier: true,

@@ -70,6 +70,7 @@ interface SystemSettingsFormProps {
     | "passThroughUpstreamErrorMessage"
     | "enableHttp2"
     | "enableOpenaiResponsesWebsocket"
+    | "enableCodexMultiAgentV2Compatibility"
     | "enableHighConcurrencyMode"
     | "interceptAnthropicWarmupRequests"
     | "enableThinkingSignatureRectifier"
@@ -140,6 +141,9 @@ export function SystemSettingsForm({ initialSettings }: SystemSettingsFormProps)
   const [enableHttp2, setEnableHttp2] = useState(initialSettings.enableHttp2);
   const [enableOpenaiResponsesWebsocket, setEnableOpenaiResponsesWebsocket] = useState(
     initialSettings.enableOpenaiResponsesWebsocket
+  );
+  const [enableCodexMultiAgentV2Compatibility, setEnableCodexMultiAgentV2Compatibility] = useState(
+    initialSettings.enableCodexMultiAgentV2Compatibility
   );
   const [enableHighConcurrencyMode, setEnableHighConcurrencyMode] = useState(
     initialSettings.enableHighConcurrencyMode
@@ -316,6 +320,7 @@ export function SystemSettingsForm({ initialSettings }: SystemSettingsFormProps)
         passThroughUpstreamErrorMessage,
         enableHttp2,
         enableOpenaiResponsesWebsocket,
+        enableCodexMultiAgentV2Compatibility,
         enableHighConcurrencyMode,
         interceptAnthropicWarmupRequests,
         enableThinkingSignatureRectifier,
@@ -358,6 +363,7 @@ export function SystemSettingsForm({ initialSettings }: SystemSettingsFormProps)
         setPassThroughUpstreamErrorMessage(result.data.passThroughUpstreamErrorMessage);
         setEnableHttp2(result.data.enableHttp2);
         setEnableOpenaiResponsesWebsocket(result.data.enableOpenaiResponsesWebsocket);
+        setEnableCodexMultiAgentV2Compatibility(result.data.enableCodexMultiAgentV2Compatibility);
         setEnableHighConcurrencyMode(result.data.enableHighConcurrencyMode);
         setInterceptAnthropicWarmupRequests(result.data.interceptAnthropicWarmupRequests);
         setEnableThinkingSignatureRectifier(result.data.enableThinkingSignatureRectifier);
@@ -712,6 +718,28 @@ export function SystemSettingsForm({ initialSettings }: SystemSettingsFormProps)
             id="enable-http2"
             checked={enableHttp2}
             onCheckedChange={(checked) => setEnableHttp2(checked)}
+            disabled={isPending}
+          />
+        </div>
+
+        <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5 flex items-center justify-between hover:bg-white/[0.04] transition-colors">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-amber-500/10 text-amber-400 shrink-0">
+              <Terminal className="h-4 w-4" />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-foreground">
+                {t("enableCodexMultiAgentV2Compatibility")}
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {t("enableCodexMultiAgentV2CompatibilityDesc")}
+              </p>
+            </div>
+          </div>
+          <Switch
+            id="enable-codex-multi-agent-v2-compatibility"
+            checked={enableCodexMultiAgentV2Compatibility}
+            onCheckedChange={setEnableCodexMultiAgentV2Compatibility}
             disabled={isPending}
           />
         </div>

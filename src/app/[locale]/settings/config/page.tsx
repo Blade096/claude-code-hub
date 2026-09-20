@@ -57,6 +57,7 @@ async function SettingsConfigContent({ locale }: { locale: string }) {
             passThroughUpstreamErrorMessage: settings.passThroughUpstreamErrorMessage,
             enableHttp2: settings.enableHttp2,
             enableOpenaiResponsesWebsocket: settings.enableOpenaiResponsesWebsocket,
+            enableCodexMultiAgentV2Compatibility: settings.enableCodexMultiAgentV2Compatibility,
             enableHighConcurrencyMode: settings.enableHighConcurrencyMode,
             interceptAnthropicWarmupRequests: settings.interceptAnthropicWarmupRequests,
             enableThinkingSignatureRectifier: settings.enableThinkingSignatureRectifier,

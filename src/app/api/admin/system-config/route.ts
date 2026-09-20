@@ -77,6 +77,7 @@ export async function POST(req: Request) {
       passThroughUpstreamErrorMessage: validated.passThroughUpstreamErrorMessage,
       enableHttp2: validated.enableHttp2,
       enableOpenaiResponsesWebsocket: validated.enableOpenaiResponsesWebsocket,
+      enableCodexMultiAgentV2Compatibility: validated.enableCodexMultiAgentV2Compatibility,
       enableHighConcurrencyMode: validated.enableHighConcurrencyMode,
       interceptAnthropicWarmupRequests: validated.interceptAnthropicWarmupRequests,
       enableThinkingSignatureRectifier: validated.enableThinkingSignatureRectifier,

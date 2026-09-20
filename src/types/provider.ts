@@ -10,6 +10,8 @@ export type ProviderType =
   | "gemini-cli"
   | "openai-compatible";
 
+export type CodexMultiAgentV2Mode = "native" | "portable" | "disabled";
+
 // Codex（Responses API）请求参数覆写偏好
 // - "inherit": 遵循客户端请求（默认）
 // - 其他值: 强制覆写请求体字段
@@ -97,6 +99,7 @@ export type ProviderBatchPatchField =
   | "preserve_client_ip"
   | "disable_session_reuse"
   | "remote_compaction_v2"
+  | "codex_multi_agent_v2_mode"
   | "group_priorities"
   | "cache_ttl_preference"
   | "swap_cache_ttl_billing"
@@ -153,6 +156,7 @@ export interface ProviderBatchPatchDraft {
   preserve_client_ip?: ProviderPatchDraftInput<boolean>;
   disable_session_reuse?: ProviderPatchDraftInput<boolean>;
   remote_compaction_v2?: ProviderPatchDraftInput<boolean>;
+  codex_multi_agent_v2_mode?: ProviderPatchDraftInput<CodexMultiAgentV2Mode>;
   group_priorities?: ProviderPatchDraftInput<Record<string, number>>;
   cache_ttl_preference?: ProviderPatchDraftInput<CacheTtlPreference>;
   swap_cache_ttl_billing?: ProviderPatchDraftInput<boolean>;
@@ -210,6 +214,7 @@ export interface ProviderBatchPatch {
   preserve_client_ip: ProviderPatchOperation<boolean>;
   disable_session_reuse: ProviderPatchOperation<boolean>;
   remote_compaction_v2: ProviderPatchOperation<boolean>;
+  codex_multi_agent_v2_mode: ProviderPatchOperation<CodexMultiAgentV2Mode>;
   group_priorities: ProviderPatchOperation<Record<string, number>>;
   cache_ttl_preference: ProviderPatchOperation<CacheTtlPreference>;
   swap_cache_ttl_billing: ProviderPatchOperation<boolean>;
@@ -267,6 +272,7 @@ export interface ProviderBatchApplyUpdates {
   preserve_client_ip?: boolean;
   disable_session_reuse?: boolean;
   remote_compaction_v2?: boolean;
+  codex_multi_agent_v2_mode?: CodexMultiAgentV2Mode;
   group_priorities?: Record<string, number> | null;
   cache_ttl_preference?: CacheTtlPreference | null;
   swap_cache_ttl_billing?: boolean;
@@ -343,6 +349,7 @@ export interface Provider {
   disableSessionReuse: boolean;
   // 是否由 CCH 代该供应商合成 Codex 远程压缩摘要
   remoteCompactionV2: boolean;
+  codexMultiAgentV2Mode: CodexMultiAgentV2Mode;
   modelRedirects: ProviderModelRedirectRule[] | null;
 
   // Scheduled active time window (HH:mm format, null = always active)
@@ -468,6 +475,7 @@ export interface ProviderDisplay {
   disableSessionReuse: boolean;
   // 是否由 CCH 代该供应商合成 Codex 远程压缩摘要
   remoteCompactionV2: boolean;
+  codexMultiAgentV2Mode: CodexMultiAgentV2Mode;
   modelRedirects: ProviderModelRedirectRule[] | null;
   // Scheduled active time window
   activeTimeStart: string | null;
@@ -589,6 +597,7 @@ export interface CreateProviderData {
   disable_session_reuse?: boolean;
   // 是否由 CCH 代该供应商合成 Codex 远程压缩摘要
   remote_compaction_v2?: boolean;
+  codex_multi_agent_v2_mode?: CodexMultiAgentV2Mode;
   model_redirects?: ProviderModelRedirectRule[] | null;
   active_time_start?: string | null;
   active_time_end?: string | null;
@@ -676,6 +685,7 @@ export interface UpdateProviderData {
   disable_session_reuse?: boolean;
   // 是否由 CCH 代该供应商合成 Codex 远程压缩摘要
   remote_compaction_v2?: boolean;
+  codex_multi_agent_v2_mode?: CodexMultiAgentV2Mode;
   model_redirects?: ProviderModelRedirectRule[] | null;
   active_time_start?: string | null;
   active_time_end?: string | null;

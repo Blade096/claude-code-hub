@@ -91,6 +91,7 @@ import type {
   AnthropicMaxTokensPreference,
   AnthropicThinkingBudgetPreference,
   CodexImageGenerationPreference,
+  CodexMultiAgentV2Mode,
   CodexParallelToolCallsPreference,
   CodexReasoningEffortPreference,
   CodexReasoningSummaryPreference,
@@ -335,6 +336,7 @@ export async function getProviders(): Promise<ProviderDisplay[]> {
         preserveClientIp: provider.preserveClientIp,
         disableSessionReuse: provider.disableSessionReuse,
         remoteCompactionV2: provider.remoteCompactionV2,
+        codexMultiAgentV2Mode: provider.codexMultiAgentV2Mode,
         modelRedirects: provider.modelRedirects,
         activeTimeStart: provider.activeTimeStart,
         activeTimeEnd: provider.activeTimeEnd,
@@ -537,6 +539,7 @@ export async function addProvider(data: {
   preserve_client_ip?: boolean;
   disable_session_reuse?: boolean;
   remote_compaction_v2?: boolean;
+  codex_multi_agent_v2_mode?: CodexMultiAgentV2Mode;
   model_redirects?: ProviderModelRedirectRule[] | null;
   active_time_start?: string | null;
   active_time_end?: string | null;
@@ -754,6 +757,7 @@ export async function editProvider(
     preserve_client_ip?: boolean;
     disable_session_reuse?: boolean;
     remote_compaction_v2?: boolean;
+    codex_multi_agent_v2_mode?: CodexMultiAgentV2Mode;
     model_redirects?: ProviderModelRedirectRule[] | null;
     active_time_start?: string | null;
     active_time_end?: string | null;
@@ -1467,6 +1471,7 @@ const SINGLE_EDIT_PREIMAGE_FIELD_TO_PROVIDER_KEY: Record<string, keyof Provider>
   preserve_client_ip: "preserveClientIp",
   disable_session_reuse: "disableSessionReuse",
   remote_compaction_v2: "remoteCompactionV2",
+  codex_multi_agent_v2_mode: "codexMultiAgentV2Mode",
   active_time_start: "activeTimeStart",
   active_time_end: "activeTimeEnd",
   model_redirects: "modelRedirects",
@@ -1642,6 +1647,9 @@ function mapApplyUpdatesToRepositoryFormat(
   if (applyUpdates.remote_compaction_v2 !== undefined) {
     result.remoteCompactionV2 = applyUpdates.remote_compaction_v2;
   }
+  if (applyUpdates.codex_multi_agent_v2_mode !== undefined) {
+    result.codexMultiAgentV2Mode = applyUpdates.codex_multi_agent_v2_mode;
+  }
   if (applyUpdates.active_time_start !== undefined) {
     result.activeTimeStart = applyUpdates.active_time_start;
   }
@@ -1768,6 +1776,7 @@ const PATCH_FIELD_TO_PROVIDER_KEY: Record<ProviderBatchPatchField, keyof Provide
   preserve_client_ip: "preserveClientIp",
   disable_session_reuse: "disableSessionReuse",
   remote_compaction_v2: "remoteCompactionV2",
+  codex_multi_agent_v2_mode: "codexMultiAgentV2Mode",
   active_time_start: "activeTimeStart",
   active_time_end: "activeTimeEnd",
   group_priorities: "groupPriorities",
@@ -2391,6 +2400,7 @@ export interface BatchUpdateProvidersParams {
     weight?: number;
     cost_multiplier?: number;
     group_tag?: string | null;
+    codex_multi_agent_v2_mode?: CodexMultiAgentV2Mode;
     model_redirects?: ProviderModelRedirectRule[] | null;
     allowed_models?: AllowedModelRuleInput[] | null;
     allowed_clients?: string[];
@@ -2442,6 +2452,9 @@ export async function batchUpdateProviders(
     }
     if (updates.group_tag !== undefined) {
       repositoryUpdates.groupTag = normalizeProviderGroupTag(updates.group_tag);
+    }
+    if (updates.codex_multi_agent_v2_mode !== undefined) {
+      repositoryUpdates.codexMultiAgentV2Mode = updates.codex_multi_agent_v2_mode;
     }
     if (updates.model_redirects !== undefined) {
       if (updates.model_redirects === null) {

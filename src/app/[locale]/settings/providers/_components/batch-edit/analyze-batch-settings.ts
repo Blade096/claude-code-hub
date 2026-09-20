@@ -7,6 +7,7 @@ import type {
   AnthropicMaxTokensPreference,
   AnthropicThinkingBudgetPreference,
   CodexImageGenerationPreference,
+  CodexMultiAgentV2Mode,
   CodexParallelToolCallsPreference,
   CodexReasoningEffortPreference,
   CodexReasoningSummaryPreference,
@@ -35,6 +36,7 @@ export interface BatchSettingsAnalysis {
     preserveClientIp: FieldAnalysisResult<boolean>;
     disableSessionReuse: FieldAnalysisResult<boolean>;
     remoteCompactionV2: FieldAnalysisResult<boolean>;
+    codexMultiAgentV2Mode: FieldAnalysisResult<CodexMultiAgentV2Mode>;
     modelRedirects: FieldAnalysisResult<ProviderModelRedirectRule[]>;
     allowedModels: FieldAnalysisResult<AllowedModelRule[]>;
     allowedClients: FieldAnalysisResult<string[]>;
@@ -129,6 +131,7 @@ export function analyzeBatchProviderSettings(providers: ProviderDisplay[]): Batc
       preserveClientIp: analyzeField(providers, (p) => p.preserveClientIp),
       disableSessionReuse: analyzeField(providers, (p) => p.disableSessionReuse),
       remoteCompactionV2: analyzeField(providers, (p) => p.remoteCompactionV2),
+      codexMultiAgentV2Mode: analyzeField(providers, (p) => p.codexMultiAgentV2Mode ?? "native"),
       modelRedirects: analyzeField(providers, (p) => p.modelRedirects ?? []),
       allowedModels: analyzeField(
         providers,

@@ -86,3 +86,29 @@ describe("provider-patch-contract - remote compaction toggle", () => {
     expect(hasProviderBatchPatchChanges(normalized.data)).toBe(true);
   });
 });
+
+describe("provider-patch-contract - Codex MultiAgentV2 mode", () => {
+  it("normalizes and applies the provider mode", () => {
+    const normalized = normalizeProviderBatchPatchDraft({
+      codex_multi_agent_v2_mode: { set: "portable" },
+    });
+
+    expect(normalized.ok).toBe(true);
+    if (!normalized.ok) return;
+
+    const updates = buildProviderBatchApplyUpdates(normalized.data);
+    expect(updates.ok).toBe(true);
+    if (!updates.ok) return;
+    expect(updates.data.codex_multi_agent_v2_mode).toBe("portable");
+    expect(hasProviderBatchPatchChanges(normalized.data)).toBe(true);
+  });
+
+  it("rejects clear and unknown modes", () => {
+    expect(
+      normalizeProviderBatchPatchDraft({ codex_multi_agent_v2_mode: { clear: true } }).ok
+    ).toBe(false);
+    expect(
+      normalizeProviderBatchPatchDraft({ codex_multi_agent_v2_mode: { set: "automatic" } }).ok
+    ).toBe(false);
+  });
+});

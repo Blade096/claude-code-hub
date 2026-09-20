@@ -1,5 +1,6 @@
 import { ProxyAuthenticator } from "./auth-guard";
 import { ProxyClientGuard } from "./client-guard";
+import { ProxyCodexMultiAgentV2Gate } from "./codex-multi-agent-v2-gate";
 import type { EndpointPolicy } from "./endpoint-policy";
 import { ProxyMessageService } from "./message-service";
 import { ProxyModelGuard } from "./model-guard";
@@ -38,6 +39,7 @@ export type GuardStepKey =
   | "sensitive"
   | "rateLimit"
   | "provider"
+  | "codexMultiAgentV2"
   | "providerRequestFilter"
   | "messageContext";
 
@@ -126,6 +128,12 @@ const Steps: Record<GuardStepKey, GuardStep> = {
       return ProxyProviderResolver.ensure(session);
     },
   },
+  codexMultiAgentV2: {
+    name: "codexMultiAgentV2",
+    async execute(session) {
+      return ProxyCodexMultiAgentV2Gate.ensure(session);
+    },
+  },
   providerRequestFilter: {
     name: "providerRequestFilter",
     async execute(session) {
@@ -211,17 +219,28 @@ export const CHAT_PIPELINE: GuardConfig = {
     "requestFilter",
     "rateLimit",
     "provider",
+    "codexMultiAgentV2",
     "providerRequestFilter",
     "messageContext",
   ],
 };
 
 export const RAW_PASSTHROUGH_PIPELINE: GuardConfig = {
-  steps: ["auth", "client", "model", "version", "probe", "provider"],
+  steps: ["auth", "client", "model", "version", "probe", "provider", "codexMultiAgentV2"],
 };
 
 export const RAW_SAFE_SESSION_PIPELINE: GuardConfig = {
-  steps: ["auth", "client", "model", "version", "probe", "session", "provider", "messageContext"],
+  steps: [
+    "auth",
+    "client",
+    "model",
+    "version",
+    "probe",
+    "session",
+    "provider",
+    "codexMultiAgentV2",
+    "messageContext",
+  ],
 };
 
 export const COUNT_TOKENS_PIPELINE: GuardConfig = RAW_SAFE_SESSION_PIPELINE;

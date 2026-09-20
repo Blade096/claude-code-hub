@@ -394,6 +394,16 @@
       "label": "遠端壓縮替代（Codex）",
       "desc": "啟用後，Codex 的長對話壓縮會由本站以該供應商自己的模型產生摘要，再依 Responses 壓縮協議回傳給客戶端。適用於上游不支援壓縮協議的情況。"
     },
+    "codexMultiAgentV2Mode": {
+      "label": "Codex MultiAgentV2 相容模式",
+      "desc": "選擇此供應商處理 Codex MultiAgentV2 協作請求的方式。",
+      "options": {
+        "native": "原生協議",
+        "portable": "Portable 相容",
+        "disabled": "停用"
+      },
+      "portableWarning": "委派任務內容會以明文經過 CCH 與第三方供應商，同時還必須啟用系統總開關。"
+    },
     "options": {
       "title": "選項",
       "desc": "附加供應商選項和覆寫設定"

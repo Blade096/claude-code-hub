@@ -215,6 +215,10 @@ export const providers = pgTable('providers', {
   disableSessionReuse: boolean('disable_session_reuse').notNull().default(false),
   // 远程压缩替代：该供应商是否由 CCH 代上游合成 Codex 远程压缩摘要
   remoteCompactionV2: boolean('remote_compaction_v2').notNull().default(false),
+  codexMultiAgentV2Mode: varchar('codex_multi_agent_v2_mode', { length: 16 })
+    .notNull()
+    .default('native')
+    .$type<'native' | 'portable' | 'disabled'>(),
 
   // 模型重定向：将请求的模型名称重定向到另一个模型
   modelRedirects: jsonb('model_redirects').$type<
@@ -813,6 +817,11 @@ export const systemSettings = pgTable('system_settings', {
   enableOpenaiResponsesWebsocket: boolean('enable_openai_responses_websocket')
     .notNull()
     .default(true),
+
+  // Codex MultiAgentV2 portable compatibility 总开关（默认关闭）
+  enableCodexMultiAgentV2Compatibility: boolean('enable_codex_multi_agent_v2_compatibility')
+    .notNull()
+    .default(false),
 
   // 高并发模式（默认关闭）
   // 开启后：关闭部分 Redis 调试快照与实时观测写入，降低高并发下的 CPU 与 IO 开销

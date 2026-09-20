@@ -298,10 +298,11 @@ describe("SystemSettings：数据库缺列时的保存兜底", () => {
     vi.useFakeTimers();
     vi.setSystemTime(now);
 
-    // 第一次 select(fullSelection) 因新列缺失而抛 42703；
-    // 第二次 select(selectionWithoutGeminiFunctionId) 命中——验证新列已加入降级链最外层。
+    // 前两次 select 分别包含新兼容开关与 Gemini 新列并抛 42703；
+    // 第三次 select 命中，验证降级链按引入顺序剥离。
     const selectMock = vi
       .fn()
+      .mockReturnValueOnce(createRejectedThenableQuery({ code: "42703" }))
       .mockReturnValueOnce(createRejectedThenableQuery({ code: "42703" }))
       .mockReturnValueOnce(
         createThenableQuery([
@@ -335,15 +336,16 @@ describe("SystemSettings：数据库缺列时的保存兜底", () => {
     const result = await getSystemSettings();
 
     // 降级读取成功（未抛错）。
-    expect(selectMock).toHaveBeenCalledTimes(2);
+    expect(selectMock).toHaveBeenCalledTimes(3);
     expect(result.siteTitle).toBe("Claude Code Hub");
     expect(result.enableHttp2).toBe(true);
 
-    // 关键回归保护：第二次 select 必须恰好剥离了新列（最外层降级），
-    // 而非旧行为先剥离 enableThinkingEffortConflictRectifier。若新列未加入降级链最外层，下面两条断言会失败。
     const secondSelection = selectMock.mock.calls[1]?.[0] as Record<string, unknown>;
-    expect(secondSelection).not.toHaveProperty("enableGeminiFunctionIdRectifier");
-    expect(secondSelection).toHaveProperty("enableThinkingEffortConflictRectifier");
+    expect(secondSelection).not.toHaveProperty("enableCodexMultiAgentV2Compatibility");
+    expect(secondSelection).toHaveProperty("enableGeminiFunctionIdRectifier");
+    const thirdSelection = selectMock.mock.calls[2]?.[0] as Record<string, unknown>;
+    expect(thirdSelection).not.toHaveProperty("enableGeminiFunctionIdRectifier");
+    expect(thirdSelection).toHaveProperty("enableThinkingEffortConflictRectifier");
 
     vi.useRealTimers();
   });

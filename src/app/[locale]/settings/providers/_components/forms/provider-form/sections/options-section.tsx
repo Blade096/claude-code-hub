@@ -18,6 +18,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { CUSTOM_HEADERS_PLACEHOLDER } from "@/lib/custom-headers";
 import type {
   CodexImageGenerationPreference,
+  CodexMultiAgentV2Mode,
   CodexParallelToolCallsPreference,
   CodexReasoningEffortPreference,
   CodexReasoningSummaryPreference,
@@ -181,6 +182,42 @@ export function OptionsSection({ subSectionRefs }: OptionsSectionProps) {
                 ) : undefined
               }
             >
+              <SmartInputWrapper
+                label={t("sections.routing.codexMultiAgentV2Mode.label")}
+                description={t("sections.routing.codexMultiAgentV2Mode.desc")}
+              >
+                <Select
+                  value={state.routing.codexMultiAgentV2Mode}
+                  onValueChange={(value) =>
+                    dispatch({
+                      type: "SET_CODEX_MULTI_AGENT_V2_MODE",
+                      payload: value as CodexMultiAgentV2Mode,
+                    })
+                  }
+                  disabled={state.ui.isPending}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="native">
+                      {t("sections.routing.codexMultiAgentV2Mode.options.native")}
+                    </SelectItem>
+                    <SelectItem value="portable">
+                      {t("sections.routing.codexMultiAgentV2Mode.options.portable")}
+                    </SelectItem>
+                    <SelectItem value="disabled">
+                      {t("sections.routing.codexMultiAgentV2Mode.options.disabled")}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                {state.routing.codexMultiAgentV2Mode === "portable" && (
+                  <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                    {t("sections.routing.codexMultiAgentV2Mode.portableWarning")}
+                  </p>
+                )}
+              </SmartInputWrapper>
+
               <div className="space-y-4">
                 <SmartInputWrapper
                   label={t("sections.routing.codexOverrides.reasoningEffort.label")}

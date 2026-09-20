@@ -394,6 +394,16 @@
       "label": "Remote compaction fallback (Codex)",
       "desc": "When enabled, long-session compaction for Codex requests is summarized by this hub using the same provider's model and returned in the Responses compaction protocol. Use it when the upstream does not implement compaction itself."
     },
+    "codexMultiAgentV2Mode": {
+      "label": "Codex MultiAgentV2 compatibility",
+      "desc": "Choose how this provider handles Codex MultiAgentV2 collaboration requests.",
+      "options": {
+        "native": "Native protocol",
+        "portable": "Portable compatibility",
+        "disabled": "Disabled"
+      },
+      "portableWarning": "Delegated task text passes through CCH and the third-party provider in plaintext. The global compatibility switch must also be enabled."
+    },
     "options": {
       "title": "Options",
       "desc": "Additional provider options and overrides"

@@ -493,6 +493,10 @@ export const CreateProviderSchema = z
     disable_session_reuse: z.boolean().optional().default(false),
     // 是否由 CCH 代该供应商合成 Codex 远程压缩摘要
     remote_compaction_v2: z.boolean().optional().default(false),
+    codex_multi_agent_v2_mode: z
+      .enum(["native", "portable", "disabled"])
+      .optional()
+      .default("native"),
     model_redirects: PROVIDER_MODEL_REDIRECT_RULES_SCHEMA,
     // Scheduled active time window (HH:mm format)
     active_time_start: z
@@ -743,6 +747,7 @@ export const UpdateProviderSchema = z
     disable_session_reuse: z.boolean().optional(),
     // 是否由 CCH 代该供应商合成 Codex 远程压缩摘要
     remote_compaction_v2: z.boolean().optional(),
+    codex_multi_agent_v2_mode: z.enum(["native", "portable", "disabled"]).optional(),
     model_redirects: PROVIDER_MODEL_REDIRECT_RULES_SCHEMA,
     active_time_start: z
       .string()
@@ -1007,6 +1012,8 @@ export const UpdateSystemSettingsSchema = z.object({
   billHedgeLosers: z.boolean().optional(),
   // 启用 OpenAI Responses WebSocket 支持（可选，仅 Codex 类型供应商生效）
   enableOpenaiResponsesWebsocket: z.boolean().optional(),
+  // Codex MultiAgentV2 portable compatibility 总开关（可选；默认关闭）
+  enableCodexMultiAgentV2Compatibility: z.boolean().optional(),
   // 高并发模式（可选）
   enableHighConcurrencyMode: z.boolean().optional(),
   // 可选拦截 Anthropic Warmup 请求（可选）

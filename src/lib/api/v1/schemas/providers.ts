@@ -43,6 +43,9 @@ export const ProviderSummarySchema = z
     remoteCompactionV2: z
       .boolean()
       .describe("Whether CCH synthesizes Codex remote compaction for this provider."),
+    codexMultiAgentV2Mode: z
+      .enum(["native", "portable", "disabled"])
+      .describe("Codex MultiAgentV2 compatibility mode for this provider."),
     modelRedirects: z.array(z.unknown()).nullable().describe("Model redirect rules."),
     activeTimeStart: NullableStringSchema.describe("Scheduled active start time in HH:mm."),
     activeTimeEnd: NullableStringSchema.describe("Scheduled active end time in HH:mm."),
@@ -207,6 +210,10 @@ const ProviderBatchUpdateFieldsSchema = z
     weight: z.number().min(0).optional().describe("Provider routing weight."),
     cost_multiplier: z.number().min(0).optional().describe("Provider cost multiplier."),
     group_tag: z.string().max(200).nullable().optional().describe("Provider group tag."),
+    codex_multi_agent_v2_mode: z
+      .enum(["native", "portable", "disabled"])
+      .optional()
+      .describe("Codex MultiAgentV2 compatibility mode."),
     model_redirects: z.array(z.unknown()).nullable().optional().describe("Model redirect rules."),
     allowed_models: z.array(z.unknown()).nullable().optional().describe("Allowed model rules."),
     allowed_clients: z.array(z.string()).optional().describe("Allowed client patterns."),
@@ -379,6 +386,11 @@ export const ProviderCreateSchema = z
       .boolean()
       .optional()
       .describe("Whether CCH synthesizes Codex remote compaction for this provider."),
+    codex_multi_agent_v2_mode: z
+      .enum(["native", "portable", "disabled"])
+      .optional()
+      .default("native")
+      .describe("Codex MultiAgentV2 compatibility mode."),
     model_redirects: z.array(z.unknown()).nullable().optional().describe("Model redirect rules."),
     active_time_start: TimeOfDaySchema.nullable()
       .optional()
@@ -525,6 +537,7 @@ export const ProviderUpdateSchema = ProviderCreateSchema.omit({ key: true })
       .optional()
       .describe("Provider API key. Write-only."),
     provider_type: ProviderTypeSchema.optional(),
+    codex_multi_agent_v2_mode: z.enum(["native", "portable", "disabled"]).optional(),
   })
   .partial()
   .strict()

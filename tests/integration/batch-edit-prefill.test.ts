@@ -11,6 +11,7 @@ describe("批量编辑预填充集成测试", () => {
         priority: 10,
         weight: 5,
         costMultiplier: 1.5,
+        codexMultiAgentV2Mode: "portable",
         modelRedirects: [{ matchType: "exact", source: "model-a", target: "model-b" }],
         allowedModels: ["model-1", "model-2"],
         limit5hUsd: 100,
@@ -23,6 +24,7 @@ describe("批量编辑预填充集成测试", () => {
         priority: 10,
         weight: 5,
         costMultiplier: 1.5,
+        codexMultiAgentV2Mode: "portable",
         modelRedirects: [{ matchType: "exact", source: "model-a", target: "model-b" }],
         allowedModels: ["model-1", "model-2"],
         limit5hUsd: 100,
@@ -37,6 +39,7 @@ describe("批量编辑预填充集成测试", () => {
     expect(state.routing.priority).toBe(10);
     expect(state.routing.weight).toBe(5);
     expect(state.routing.costMultiplier).toBe(1.5);
+    expect(state.routing.codexMultiAgentV2Mode).toBe("portable");
     expect(state.routing.modelRedirects).toEqual([
       { matchType: "exact", source: "model-a", target: "model-b" },
     ]);

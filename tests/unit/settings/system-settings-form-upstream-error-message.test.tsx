@@ -39,6 +39,8 @@ type FormSettings = Pick<
   | "verboseProviderError"
   | "passThroughUpstreamErrorMessage"
   | "enableHttp2"
+  | "enableOpenaiResponsesWebsocket"
+  | "enableCodexMultiAgentV2Compatibility"
   | "enableHighConcurrencyMode"
   | "interceptAnthropicWarmupRequests"
   | "enableThinkingSignatureRectifier"
@@ -81,6 +83,8 @@ const baseSettings: FormSettings = {
   verboseProviderError: false,
   passThroughUpstreamErrorMessage: true,
   enableHttp2: true,
+  enableOpenaiResponsesWebsocket: true,
+  enableCodexMultiAgentV2Compatibility: false,
   enableHighConcurrencyMode: false,
   interceptAnthropicWarmupRequests: true,
   enableThinkingSignatureRectifier: true,
@@ -175,6 +179,31 @@ describe("SystemSettingsForm upstream error message toggles", () => {
     expect(getSwitch("pass-through-upstream-error-message").getAttribute("aria-checked")).toBe(
       "true"
     );
+
+    unmount();
+  });
+
+  test("Codex MultiAgentV2 兼容开关展示明文风险并可提交", async () => {
+    systemConfigActionMocks.saveSystemSettings.mockResolvedValueOnce({
+      ok: true,
+      data: buildSettings({ enableCodexMultiAgentV2Compatibility: true }),
+    });
+    const { unmount } = renderForm();
+
+    expect(document.body.textContent).toContain("Delegated task text may pass through CCH");
+    expect(
+      getSwitch("enable-codex-multi-agent-v2-compatibility").getAttribute("aria-checked")
+    ).toBe("false");
+
+    clickSwitch("enable-codex-multi-agent-v2-compatibility");
+    await submitForm();
+
+    expect(systemConfigActionMocks.saveSystemSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ enableCodexMultiAgentV2Compatibility: true })
+    );
+    expect(
+      getSwitch("enable-codex-multi-agent-v2-compatibility").getAttribute("aria-checked")
+    ).toBe("true");
 
     unmount();
   });

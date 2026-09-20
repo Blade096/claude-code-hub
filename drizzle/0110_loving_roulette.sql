@@ -1,0 +1,2 @@
+ALTER TABLE "providers" ADD COLUMN "codex_multi_agent_v2_mode" varchar(16) DEFAULT 'native' NOT NULL;--> statement-breakpoint
+ALTER TABLE "system_settings" ADD COLUMN "enable_codex_multi_agent_v2_compatibility" boolean DEFAULT false NOT NULL;

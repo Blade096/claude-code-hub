@@ -76,6 +76,8 @@ describe("saveSystemSettings", () => {
       verboseProviderError: false,
       passThroughUpstreamErrorMessage: true,
       enableHttp2: false,
+      enableOpenaiResponsesWebsocket: true,
+      enableCodexMultiAgentV2Compatibility: false,
       enableHighConcurrencyMode: false,
       interceptAnthropicWarmupRequests: false,
       enableThinkingSignatureRectifier: false,
@@ -149,6 +151,14 @@ describe("saveSystemSettings", () => {
         verboseProviderError: true,
         passThroughUpstreamErrorMessage: false,
       })
+    );
+  });
+
+  it("should persist the Codex MultiAgentV2 compatibility switch", async () => {
+    await saveSystemSettings({ enableCodexMultiAgentV2Compatibility: true });
+
+    expect(updateSystemSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ enableCodexMultiAgentV2Compatibility: true })
     );
   });
 

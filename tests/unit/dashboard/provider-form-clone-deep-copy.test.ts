@@ -17,6 +17,9 @@ function makeProvider(overrides?: Partial<ProviderDisplay>): ProviderDisplay {
     providerType: "claude",
     providerVendorId: null,
     preserveClientIp: false,
+    disableSessionReuse: false,
+    remoteCompactionV2: false,
+    codexMultiAgentV2Mode: "native",
     modelRedirects: [{ matchType: "exact", source: "claude-3", target: "claude-3.5" }],
     allowedModels: ["claude-3", "claude-3.5"],
     mcpPassthroughType: "none",
@@ -136,6 +139,12 @@ describe("createInitialState deep-copy safety", () => {
       const state = createInitialState("create", undefined, source);
       expect(state.basic.key).toBe("");
     });
+
+    it("copies the Codex MultiAgentV2 provider mode", () => {
+      const source = makeProvider({ codexMultiAgentV2Mode: "portable" });
+      const state = createInitialState("create", undefined, source);
+      expect(state.routing.codexMultiAgentV2Mode).toBe("portable");
+    });
   });
 
   describe("edit mode", () => {
@@ -147,6 +156,7 @@ describe("createInitialState deep-copy safety", () => {
       expect(state.routing.allowedModels).not.toBe(source.allowedModels);
       expect(state.routing.groupPriorities).not.toBe(source.groupPriorities);
       expect(state.routing.anthropicAdaptiveThinking).not.toBe(source.anthropicAdaptiveThinking);
+      expect(state.routing.codexMultiAgentV2Mode).toBe("native");
     });
   });
 
@@ -157,6 +167,7 @@ describe("createInitialState deep-copy safety", () => {
       expect(state.routing.allowedModels).toEqual([]);
       expect(state.routing.groupPriorities).toEqual({});
       expect(state.routing.anthropicAdaptiveThinking).toBeNull();
+      expect(state.routing.codexMultiAgentV2Mode).toBe("native");
     });
   });
 });

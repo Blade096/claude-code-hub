@@ -394,6 +394,16 @@
       "label": "リモート圧縮の代替（Codex）",
       "desc": "有効にすると、Codex の長いセッションの圧縮を本ハブがこのプロバイダーのモデルで要約し、Responses の圧縮プロトコルで返します。上流が圧縮に対応していない場合に使用します。"
     },
+    "codexMultiAgentV2Mode": {
+      "label": "Codex MultiAgentV2 互換モード",
+      "desc": "このプロバイダーが Codex MultiAgentV2 のコラボレーション要求を処理する方法を選択します。",
+      "options": {
+        "native": "ネイティブプロトコル",
+        "portable": "Portable 互換",
+        "disabled": "無効"
+      },
+      "portableWarning": "委任タスクの本文は平文で CCH とサードパーティープロバイダーを通過します。システム全体の互換スイッチも有効にする必要があります。"
+    },
     "options": {
       "title": "オプション",
       "desc": "追加のプロバイダーオプションとオーバーライド"

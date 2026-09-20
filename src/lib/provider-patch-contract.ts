@@ -44,6 +44,7 @@ const PATCH_FIELDS: ProviderBatchPatchField[] = [
   "preserve_client_ip",
   "disable_session_reuse",
   "remote_compaction_v2",
+  "codex_multi_agent_v2_mode",
   "group_priorities",
   "cache_ttl_preference",
   "swap_cache_ttl_billing",
@@ -101,6 +102,7 @@ const CLEARABLE_FIELDS: Record<ProviderBatchPatchField, boolean> = {
   preserve_client_ip: false,
   disable_session_reuse: false,
   remote_compaction_v2: false,
+  codex_multi_agent_v2_mode: false,
   group_priorities: true,
   cache_ttl_preference: true,
   swap_cache_ttl_billing: false,
@@ -219,6 +221,8 @@ function isValidSetValue(field: ProviderBatchPatchField, value: unknown): boolea
     case "swap_cache_ttl_billing":
     case "proxy_fallback_to_direct":
       return typeof value === "boolean";
+    case "codex_multi_agent_v2_mode":
+      return value === "native" || value === "portable" || value === "disabled";
     case "priority":
     case "weight":
     case "cost_multiplier":
@@ -481,6 +485,12 @@ export function normalizeProviderBatchPatchDraft(
   );
   if (!remoteCompactionV2.ok) return remoteCompactionV2;
 
+  const codexMultiAgentV2Mode = normalizePatchField(
+    "codex_multi_agent_v2_mode",
+    typedDraft.codex_multi_agent_v2_mode
+  );
+  if (!codexMultiAgentV2Mode.ok) return codexMultiAgentV2Mode;
+
   const groupPriorities = normalizePatchField("group_priorities", typedDraft.group_priorities);
   if (!groupPriorities.ok) return groupPriorities;
 
@@ -664,6 +674,7 @@ export function normalizeProviderBatchPatchDraft(
       preserve_client_ip: preserveClientIp.data,
       disable_session_reuse: disableSessionReuse.data,
       remote_compaction_v2: remoteCompactionV2.data,
+      codex_multi_agent_v2_mode: codexMultiAgentV2Mode.data,
       group_priorities: groupPriorities.data,
       cache_ttl_preference: cacheTtlPref.data,
       swap_cache_ttl_billing: swapCacheTtlBilling.data,
@@ -771,6 +782,10 @@ function applyPatchField<T>(
       case "remote_compaction_v2":
         updates.remote_compaction_v2 =
           patch.value as ProviderBatchApplyUpdates["remote_compaction_v2"];
+        return { ok: true, data: undefined };
+      case "codex_multi_agent_v2_mode":
+        updates.codex_multi_agent_v2_mode =
+          patch.value as ProviderBatchApplyUpdates["codex_multi_agent_v2_mode"];
         return { ok: true, data: undefined };
       case "group_priorities":
         updates.group_priorities = patch.value as ProviderBatchApplyUpdates["group_priorities"];
@@ -1020,6 +1035,7 @@ export function buildProviderBatchApplyUpdates(
     ["preserve_client_ip", patch.preserve_client_ip],
     ["disable_session_reuse", patch.disable_session_reuse],
     ["remote_compaction_v2", patch.remote_compaction_v2],
+    ["codex_multi_agent_v2_mode", patch.codex_multi_agent_v2_mode],
     ["group_priorities", patch.group_priorities],
     ["cache_ttl_preference", patch.cache_ttl_preference],
     ["swap_cache_ttl_billing", patch.swap_cache_ttl_billing],
@@ -1090,6 +1106,7 @@ export function hasProviderBatchPatchChanges(patch: ProviderBatchPatch): boolean
     patch.preserve_client_ip.mode !== "no_change" ||
     patch.disable_session_reuse.mode !== "no_change" ||
     patch.remote_compaction_v2.mode !== "no_change" ||
+    patch.codex_multi_agent_v2_mode.mode !== "no_change" ||
     patch.group_priorities.mode !== "no_change" ||
     patch.cache_ttl_preference.mode !== "no_change" ||
     patch.swap_cache_ttl_billing.mode !== "no_change" ||

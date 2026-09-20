@@ -101,6 +101,8 @@ function provider(overrides: Partial<ProviderDisplay> = {}): ProviderDisplay {
     providerVendorId: 1,
     preserveClientIp: false,
     disableSessionReuse: false,
+    remoteCompactionV2: false,
+    codexMultiAgentV2Mode: "portable",
     modelRedirects: null,
     activeTimeStart: null,
     activeTimeEnd: null,
@@ -530,7 +532,11 @@ describe("v1 providers read endpoints", () => {
       headers: { Authorization: "Bearer admin-token" },
     });
     expect(visible.response.status).toBe(200);
-    expect(visible.json).toMatchObject({ id: 1, providerType: "claude" });
+    expect(visible.json).toMatchObject({
+      id: 1,
+      providerType: "claude",
+      codexMultiAgentV2Mode: "portable",
+    });
 
     const hidden = await callV1Route({
       method: "GET",
@@ -597,25 +603,32 @@ describe("v1 providers read endpoints", () => {
         url: "https://new.example.com",
         key: "sk-new",
         provider_type: "openai-compatible",
+        codex_multi_agent_v2_mode: "portable",
       },
     });
     expect(created.response.status).toBe(201);
     expect(created.response.headers.get("Location")).toBe("/api/v1/providers/4");
     expect(addProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({ provider_type: "openai-compatible" })
+      expect.objectContaining({
+        provider_type: "openai-compatible",
+        codex_multi_agent_v2_mode: "portable",
+      })
     );
 
     const updated = await callV1Route({
       method: "PATCH",
       pathname: "/api/v1/providers/1",
       headers: { Authorization: "Bearer admin-token" },
-      body: { name: "Updated provider" },
+      body: { name: "Updated provider", codex_multi_agent_v2_mode: "disabled" },
     });
     expect(updated.response.status).toBe(200);
     expect(updated.response.headers.get("X-CCH-Undo-Token")).toBe("undo-1");
     expect(updated.response.headers.get("X-CCH-Operation-Id")).toBe("op-1");
     expect(updated.json).toMatchObject({ id: 1, name: "Updated provider" });
-    expect(editProviderMock).toHaveBeenCalledWith(1, { name: "Updated provider" });
+    expect(editProviderMock).toHaveBeenCalledWith(1, {
+      name: "Updated provider",
+      codex_multi_agent_v2_mode: "disabled",
+    });
 
     const deleted = await callV1Route({
       method: "DELETE",

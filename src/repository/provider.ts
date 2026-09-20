@@ -207,6 +207,7 @@ export async function createProvider(providerData: CreateProviderData): Promise<
     preserveClientIp: providerData.preserve_client_ip ?? false,
     disableSessionReuse: providerData.disable_session_reuse ?? false,
     remoteCompactionV2: providerData.remote_compaction_v2 ?? false,
+    codexMultiAgentV2Mode: providerData.codex_multi_agent_v2_mode ?? "native",
     modelRedirects: normalizeProviderModelRedirectRules(providerData.model_redirects),
     allowedModels: normalizeAllowedModelRules(providerData.allowed_models),
     allowedClients: providerData.allowed_clients ?? [],
@@ -297,6 +298,7 @@ export async function createProvider(providerData: CreateProviderData): Promise<
         preserveClientIp: providers.preserveClientIp,
         disableSessionReuse: providers.disableSessionReuse,
         remoteCompactionV2: providers.remoteCompactionV2,
+        codexMultiAgentV2Mode: providers.codexMultiAgentV2Mode,
         modelRedirects: providers.modelRedirects,
         allowedModels: providers.allowedModels,
         allowedClients: providers.allowedClients,
@@ -387,6 +389,7 @@ export async function findProviderList(
       preserveClientIp: providers.preserveClientIp,
       disableSessionReuse: providers.disableSessionReuse,
       remoteCompactionV2: providers.remoteCompactionV2,
+      codexMultiAgentV2Mode: providers.codexMultiAgentV2Mode,
       modelRedirects: providers.modelRedirects,
       allowedModels: providers.allowedModels,
       allowedClients: providers.allowedClients,
@@ -477,6 +480,7 @@ export async function findAllProvidersFresh(): Promise<Provider[]> {
       preserveClientIp: providers.preserveClientIp,
       disableSessionReuse: providers.disableSessionReuse,
       remoteCompactionV2: providers.remoteCompactionV2,
+      codexMultiAgentV2Mode: providers.codexMultiAgentV2Mode,
       modelRedirects: providers.modelRedirects,
       allowedModels: providers.allowedModels,
       allowedClients: providers.allowedClients,
@@ -571,6 +575,7 @@ export async function findProviderById(id: number): Promise<Provider | null> {
       preserveClientIp: providers.preserveClientIp,
       disableSessionReuse: providers.disableSessionReuse,
       remoteCompactionV2: providers.remoteCompactionV2,
+      codexMultiAgentV2Mode: providers.codexMultiAgentV2Mode,
       modelRedirects: providers.modelRedirects,
       allowedModels: providers.allowedModels,
       allowedClients: providers.allowedClients,
@@ -660,6 +665,8 @@ export async function updateProvider(
     dbData.disableSessionReuse = providerData.disable_session_reuse;
   if (providerData.remote_compaction_v2 !== undefined)
     dbData.remoteCompactionV2 = providerData.remote_compaction_v2;
+  if (providerData.codex_multi_agent_v2_mode !== undefined)
+    dbData.codexMultiAgentV2Mode = providerData.codex_multi_agent_v2_mode;
   if (providerData.model_redirects !== undefined)
     dbData.modelRedirects = normalizeProviderModelRedirectRules(providerData.model_redirects);
   if (providerData.allowed_models !== undefined)
@@ -825,6 +832,7 @@ export async function updateProvider(
         preserveClientIp: providers.preserveClientIp,
         disableSessionReuse: providers.disableSessionReuse,
         remoteCompactionV2: providers.remoteCompactionV2,
+        codexMultiAgentV2Mode: providers.codexMultiAgentV2Mode,
         modelRedirects: providers.modelRedirects,
         allowedModels: providers.allowedModels,
         allowedClients: providers.allowedClients,
@@ -1092,6 +1100,7 @@ export interface BatchProviderUpdates {
   preserveClientIp?: boolean;
   disableSessionReuse?: boolean;
   remoteCompactionV2?: boolean;
+  codexMultiAgentV2Mode?: Provider["codexMultiAgentV2Mode"];
   activeTimeStart?: string | null;
   activeTimeEnd?: string | null;
   groupPriorities?: Record<string, number> | null;
@@ -1186,6 +1195,9 @@ export async function updateProvidersBatch(
   }
   if (updates.remoteCompactionV2 !== undefined) {
     setClauses.remoteCompactionV2 = updates.remoteCompactionV2;
+  }
+  if (updates.codexMultiAgentV2Mode !== undefined) {
+    setClauses.codexMultiAgentV2Mode = updates.codexMultiAgentV2Mode;
   }
   if (updates.activeTimeStart !== undefined) {
     setClauses.activeTimeStart = updates.activeTimeStart;

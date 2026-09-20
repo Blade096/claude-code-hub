@@ -116,6 +116,9 @@ export const SystemSettingsSchema = z
     enableOpenaiResponsesWebsocket: z
       .boolean()
       .describe("Whether OpenAI Responses websocket upstream mode is enabled."),
+    enableCodexMultiAgentV2Compatibility: z
+      .boolean()
+      .describe("Whether Codex MultiAgentV2 portable compatibility is enabled globally."),
     enableHighConcurrencyMode: z.boolean().describe("Whether high-concurrency mode is enabled."),
     interceptAnthropicWarmupRequests: z
       .boolean()

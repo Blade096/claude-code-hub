@@ -4354,6 +4354,11 @@ export interface operations {
                             disableSessionReuse: boolean;
                             /** @description Whether CCH synthesizes Codex remote compaction for this provider. */
                             remoteCompactionV2: boolean;
+                            /**
+                             * @description Codex MultiAgentV2 compatibility mode for this provider.
+                             * @enum {string}
+                             */
+                            codexMultiAgentV2Mode: "native" | "portable" | "disabled";
                             /** @description Model redirect rules. */
                             modelRedirects: unknown[] | null;
                             /** @description Scheduled active start time in HH:mm. */
@@ -4668,6 +4673,14 @@ export interface operations {
                     preserve_client_ip?: boolean;
                     /** @description Whether sticky session reuse is disabled. */
                     disable_session_reuse?: boolean;
+                    /** @description Whether CCH synthesizes Codex remote compaction for this provider. */
+                    remote_compaction_v2?: boolean;
+                    /**
+                     * @description Codex MultiAgentV2 compatibility mode.
+                     * @default native
+                     * @enum {string}
+                     */
+                    codex_multi_agent_v2_mode?: "native" | "portable" | "disabled";
                     /** @description Model redirect rules. */
                     model_redirects?: unknown[] | null;
                     /** @description Scheduled active start time. */
@@ -4821,6 +4834,11 @@ export interface operations {
                         disableSessionReuse: boolean;
                         /** @description Whether CCH synthesizes Codex remote compaction for this provider. */
                         remoteCompactionV2: boolean;
+                        /**
+                         * @description Codex MultiAgentV2 compatibility mode for this provider.
+                         * @enum {string}
+                         */
+                        codexMultiAgentV2Mode: "native" | "portable" | "disabled";
                         /** @description Model redirect rules. */
                         modelRedirects: unknown[] | null;
                         /** @description Scheduled active start time in HH:mm. */
@@ -5145,6 +5163,11 @@ export interface operations {
                         disableSessionReuse: boolean;
                         /** @description Whether CCH synthesizes Codex remote compaction for this provider. */
                         remoteCompactionV2: boolean;
+                        /**
+                         * @description Codex MultiAgentV2 compatibility mode for this provider.
+                         * @enum {string}
+                         */
+                        codexMultiAgentV2Mode: "native" | "portable" | "disabled";
                         /** @description Model redirect rules. */
                         modelRedirects: unknown[] | null;
                         /** @description Scheduled active start time in HH:mm. */
@@ -5634,6 +5657,10 @@ export interface operations {
                     preserve_client_ip?: boolean;
                     /** @description Whether sticky session reuse is disabled. */
                     disable_session_reuse?: boolean;
+                    /** @description Whether CCH synthesizes Codex remote compaction for this provider. */
+                    remote_compaction_v2?: boolean;
+                    /** @enum {string} */
+                    codex_multi_agent_v2_mode?: "native" | "portable" | "disabled";
                     /** @description Model redirect rules. */
                     model_redirects?: unknown[] | null;
                     /** @description Scheduled active start time. */
@@ -5793,6 +5820,11 @@ export interface operations {
                         disableSessionReuse: boolean;
                         /** @description Whether CCH synthesizes Codex remote compaction for this provider. */
                         remoteCompactionV2: boolean;
+                        /**
+                         * @description Codex MultiAgentV2 compatibility mode for this provider.
+                         * @enum {string}
+                         */
+                        codexMultiAgentV2Mode: "native" | "portable" | "disabled";
                         /** @description Model redirect rules. */
                         modelRedirects: unknown[] | null;
                         /** @description Scheduled active start time in HH:mm. */
@@ -7675,6 +7707,11 @@ export interface operations {
                         cost_multiplier?: number;
                         /** @description Provider group tag. */
                         group_tag?: string | null;
+                        /**
+                         * @description Codex MultiAgentV2 compatibility mode.
+                         * @enum {string}
+                         */
+                        codex_multi_agent_v2_mode?: "native" | "portable" | "disabled";
                         /** @description Model redirect rules. */
                         model_redirects?: unknown[] | null;
                         /** @description Allowed model rules. */
@@ -11913,6 +11950,8 @@ export interface operations {
                         enableHttp2: boolean;
                         /** @description Whether OpenAI Responses websocket upstream mode is enabled. */
                         enableOpenaiResponsesWebsocket: boolean;
+                        /** @description Whether Codex MultiAgentV2 portable compatibility is enabled globally. */
+                        enableCodexMultiAgentV2Compatibility: boolean;
                         /** @description Whether high-concurrency mode is enabled. */
                         enableHighConcurrencyMode: boolean;
                         /** @description Whether Anthropic warmup requests are intercepted. */
@@ -12175,6 +12214,8 @@ export interface operations {
                     enableHttp2?: boolean;
                     /** @description Whether OpenAI Responses websocket upstream mode is enabled. */
                     enableOpenaiResponsesWebsocket?: boolean;
+                    /** @description Whether Codex MultiAgentV2 portable compatibility is enabled globally. */
+                    enableCodexMultiAgentV2Compatibility?: boolean;
                     /** @description Whether high-concurrency mode is enabled. */
                     enableHighConcurrencyMode?: boolean;
                     /** @description Whether Anthropic warmup requests are intercepted. */
@@ -12310,6 +12351,8 @@ export interface operations {
                         enableHttp2: boolean;
                         /** @description Whether OpenAI Responses websocket upstream mode is enabled. */
                         enableOpenaiResponsesWebsocket: boolean;
+                        /** @description Whether Codex MultiAgentV2 portable compatibility is enabled globally. */
+                        enableCodexMultiAgentV2Compatibility: boolean;
                         /** @description Whether high-concurrency mode is enabled. */
                         enableHighConcurrencyMode: boolean;
                         /** @description Whether Anthropic warmup requests are intercepted. */

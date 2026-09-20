@@ -74,6 +74,7 @@ export async function saveSystemSettings(formData: {
   passThroughUpstreamErrorMessage?: boolean;
   enableHttp2?: boolean;
   enableOpenaiResponsesWebsocket?: boolean;
+  enableCodexMultiAgentV2Compatibility?: boolean;
   enableHighConcurrencyMode?: boolean;
   interceptAnthropicWarmupRequests?: boolean;
   enableThinkingSignatureRectifier?: boolean;
@@ -128,6 +129,7 @@ export async function saveSystemSettings(formData: {
       passThroughUpstreamErrorMessage: validated.passThroughUpstreamErrorMessage,
       enableHttp2: validated.enableHttp2,
       enableOpenaiResponsesWebsocket: validated.enableOpenaiResponsesWebsocket,
+      enableCodexMultiAgentV2Compatibility: validated.enableCodexMultiAgentV2Compatibility,
       enableHighConcurrencyMode: validated.enableHighConcurrencyMode,
       interceptAnthropicWarmupRequests: validated.interceptAnthropicWarmupRequests,
       enableThinkingSignatureRectifier: validated.enableThinkingSignatureRectifier,

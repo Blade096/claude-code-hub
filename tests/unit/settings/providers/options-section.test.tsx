@@ -98,6 +98,7 @@ function createMockState(
       preserveClientIp: false,
       disableSessionReuse: false,
       remoteCompactionV2: false,
+      codexMultiAgentV2Mode: "native",
       modelRedirects: {},
       allowedModels: [],
       allowedClients: [],
@@ -247,6 +248,28 @@ describe("OptionsSection", () => {
       const { unmount } = renderSection();
 
       expect(document.getElementById("remote-compaction-v2")).toBeTruthy();
+
+      unmount();
+    });
+
+    it("renders Codex MultiAgentV2 provider mode for Codex providers", () => {
+      const { unmount } = renderSection({
+        state: createMockState({ routing: { providerType: "codex" } }),
+      });
+
+      expect(getBodyText()).toContain("sections.routing.codexMultiAgentV2Mode.label");
+
+      unmount();
+    });
+
+    it("shows the plaintext warning when portable mode is selected", () => {
+      const { unmount } = renderSection({
+        state: createMockState({
+          routing: { providerType: "codex", codexMultiAgentV2Mode: "portable" },
+        }),
+      });
+
+      expect(getBodyText()).toContain("sections.routing.codexMultiAgentV2Mode.portableWarning");
 
       unmount();
     });

@@ -79,6 +79,7 @@ const ACTION_TO_FIELD_PATH: Partial<Record<ProviderFormActionWith5hResetMode["ty
   SET_PRESERVE_CLIENT_IP: "routing.preserveClientIp",
   SET_DISABLE_SESSION_REUSE: "routing.disableSessionReuse",
   SET_REMOTE_COMPACTION_V2: "routing.remoteCompactionV2",
+  SET_CODEX_MULTI_AGENT_V2_MODE: "routing.codexMultiAgentV2Mode",
   SET_MODEL_REDIRECTS: "routing.modelRedirects",
   SET_ALLOWED_MODELS: "routing.allowedModels",
   SET_ALLOWED_CLIENTS: "routing.allowedClients",
@@ -165,6 +166,10 @@ export function createInitialState(
           analysis.routing.remoteCompactionV2.status === "uniform"
             ? analysis.routing.remoteCompactionV2.value
             : false,
+        codexMultiAgentV2Mode:
+          analysis.routing.codexMultiAgentV2Mode.status === "uniform"
+            ? analysis.routing.codexMultiAgentV2Mode.value
+            : "native",
         modelRedirects:
           analysis.routing.modelRedirects.status === "uniform"
             ? analysis.routing.modelRedirects.value
@@ -357,6 +362,7 @@ export function createInitialState(
         preserveClientIp: false,
         disableSessionReuse: false,
         remoteCompactionV2: false,
+        codexMultiAgentV2Mode: "native",
         modelRedirects: [],
         allowedModels: [],
         allowedClients: [],
@@ -436,6 +442,7 @@ export function createInitialState(
       preserveClientIp: sourceProvider?.preserveClientIp ?? false,
       disableSessionReuse: sourceProvider?.disableSessionReuse ?? false,
       remoteCompactionV2: sourceProvider?.remoteCompactionV2 ?? false,
+      codexMultiAgentV2Mode: sourceProvider?.codexMultiAgentV2Mode ?? "native",
       modelRedirects: normalizeProviderModelRedirectRules(sourceProvider?.modelRedirects) ?? [],
       allowedModels: normalizeAllowedModelRules(sourceProvider?.allowedModels) ?? [],
       allowedClients: sourceProvider?.allowedClients ?? [],
@@ -545,6 +552,8 @@ export function providerFormReducer(
       return { ...state, routing: { ...state.routing, disableSessionReuse: action.payload } };
     case "SET_REMOTE_COMPACTION_V2":
       return { ...state, routing: { ...state.routing, remoteCompactionV2: action.payload } };
+    case "SET_CODEX_MULTI_AGENT_V2_MODE":
+      return { ...state, routing: { ...state.routing, codexMultiAgentV2Mode: action.payload } };
     case "SET_MODEL_REDIRECTS":
       return { ...state, routing: { ...state.routing, modelRedirects: action.payload } };
     case "SET_ALLOWED_MODELS":

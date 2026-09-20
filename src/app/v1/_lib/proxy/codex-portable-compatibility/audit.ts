@@ -17,6 +17,17 @@ function currentModel(session: ProxySession): string | null {
   return session.getCurrentModel?.() ?? session.request.model ?? null;
 }
 
+function requestedModel(session: ProxySession): string | null {
+  return session.getOriginalModel?.() ?? session.request.model ?? null;
+}
+
+function requestedProvider(
+  session: ProxySession,
+  fallback: Provider | null
+): Pick<Provider, "id" | "name"> | null {
+  return session.getRequestedProvider?.() ?? fallback;
+}
+
 export function requestedPortableTransport(session: ProxySession): PortableTransport {
   if (isWebsocketClientRequest(session.headers)) return "websocket";
   return session.request.message.stream === true ? "sse" : "http";
@@ -28,6 +39,7 @@ export function createPortableCompatibilityAudit(options: {
   transformations: PortableTransformation[];
 }): CodexMultiAgentV2PortableSpecialSetting {
   const { session, provider, transformations } = options;
+  const requested = requestedProvider(session, provider);
   return {
     type: "codex_multi_agent_v2_portable",
     scope: "request",
@@ -36,11 +48,11 @@ export function createPortableCompatibilityAudit(options: {
     state: "request_transformed",
     requestedTransport: requestedPortableTransport(session),
     actualTransport: null,
-    requestedProviderId: provider.id,
-    requestedProviderName: provider.name ?? null,
+    requestedProviderId: requested?.id ?? null,
+    requestedProviderName: requested?.name ?? null,
     actualProviderId: provider.id,
     actualProviderName: provider.name ?? null,
-    requestedModel: session.request.model,
+    requestedModel: requestedModel(session),
     actualModel: currentModel(session),
     transformations: [...transformations],
     responseRestore: "pending",
@@ -112,6 +124,8 @@ export function recordPortableFailureAudit(
         setting.type === "codex_multi_agent_v2_portable"
     );
   const provider = session.provider;
+  const requested = requestedProvider(session, provider);
+  const actualProviderId = error.providerId ?? provider?.id ?? null;
   const audit =
     existing ??
     ({
@@ -122,14 +136,14 @@ export function recordPortableFailureAudit(
       state: "failed",
       requestedTransport: requestedPortableTransport(session),
       actualTransport: null,
-      requestedProviderId: error.providerId ?? provider?.id ?? null,
-      requestedProviderName:
-        error.providerId !== null && error.providerId !== provider?.id
-          ? null
-          : (provider?.name ?? null),
-      actualProviderId: null,
-      actualProviderName: null,
-      requestedModel: session.request.model,
+      requestedProviderId: requested?.id ?? null,
+      requestedProviderName: requested?.name ?? null,
+      actualProviderId,
+      actualProviderName:
+        actualProviderId !== null && actualProviderId === provider?.id
+          ? (provider.name ?? null)
+          : null,
+      requestedModel: requestedModel(session),
       actualModel: currentModel(session),
       transformations: [],
       responseRestore: "not_started",
@@ -143,9 +157,10 @@ export function recordPortableFailureAudit(
   audit.errorCategory = error.category;
   audit.requestId = requestId(session);
   audit.sessionId = session.sessionId;
-  if (provider) {
-    audit.actualProviderId = provider.id;
-    audit.actualProviderName = provider.name ?? null;
+  if (actualProviderId !== null) {
+    audit.actualProviderId = actualProviderId;
+    audit.actualProviderName =
+      actualProviderId === provider?.id ? (provider.name ?? null) : null;
     audit.actualModel = currentModel(session);
   }
   if (error.category === "compatibility_transport_unsupported") {

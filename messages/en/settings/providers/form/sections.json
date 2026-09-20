@@ -402,7 +402,7 @@
         "portable": "Portable compatibility",
         "disabled": "Disabled"
       },
-      "portableWarning": "Delegated task text passes through CCH and the third-party provider in plaintext. The global compatibility switch must also be enabled."
+      "portableWarning": "Delegated task text passes through CCH and the third-party provider in plaintext. The global compatibility switch must also be enabled. Explicitly enabling STORE_SESSION_MESSAGES or Langfuse records full payloads; restrict access and retention."
     },
     "options": {
       "title": "Options",

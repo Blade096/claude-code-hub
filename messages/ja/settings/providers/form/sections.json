@@ -402,7 +402,7 @@
         "portable": "Portable 互換",
         "disabled": "無効"
       },
-      "portableWarning": "委任タスクの本文は平文で CCH とサードパーティープロバイダーを通過します。システム全体の互換スイッチも有効にする必要があります。"
+      "portableWarning": "委任タスクの本文は平文で CCH とサードパーティープロバイダーを通過します。システム全体の互換スイッチも有効にする必要があります。STORE_SESSION_MESSAGES または Langfuse を明示的に有効にすると完全な payload が記録されるため、アクセス権限と保持期間を制限してください。"
     },
     "options": {
       "title": "オプション",

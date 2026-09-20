@@ -320,7 +320,7 @@ function createTransformationMetadata(
     version: 1,
     providerId: provider.id,
     requestFingerprint: fingerprintPreparedRequest(preparedRequest),
-    requestedModel: session.request.model,
+    requestedModel: audit.requestedModel,
     actualModel,
     toolMappings: toolResult.mappings,
     transformations,

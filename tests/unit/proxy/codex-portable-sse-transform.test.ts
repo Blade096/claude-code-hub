@@ -237,7 +237,13 @@ describe("Codex portable SSE response transform", () => {
       });
       expect(events[5].response.usage).toEqual({ input_tokens: 3, output_tokens: 5 });
       expect(state.responseRestore).toBe("restored");
-      expect(state.audit.responseRestore).toBe("restored");
+      expect(state.audit).toMatchObject({
+        state: "response_restored",
+        actualTransport: "sse",
+        responseRestore: "restored",
+        errorCategory: null,
+        responseId: "resp_1",
+      });
       expect(finalize).toHaveBeenCalledOnce();
     }
   );
@@ -281,7 +287,13 @@ describe("Codex portable SSE response transform", () => {
     expect(text).not.toContain(secret);
     expect(text).not.toContain("must-not-pass");
     expect(state.responseRestore).toBe("failed");
-    expect(state.audit.errorCategory).toBe("compatibility_restore_failed");
+    expect(state.audit).toMatchObject({
+      state: "failed",
+      actualTransport: "sse",
+      responseRestore: "failed",
+      errorCategory: "compatibility_restore_failed",
+      responseId: null,
+    });
   });
 
   test("fails closed when delta identifiers cross two calls using the same tool", async () => {

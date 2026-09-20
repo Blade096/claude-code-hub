@@ -1,7 +1,7 @@
 import { getCachedSystemSettings } from "@/lib/config";
 import type { CodexMultiAgentV2Mode } from "@/types/provider";
 import { detectClientFull } from "./client-detector";
-import { ProxyResponses } from "./responses";
+import { PortableCompatibilityError } from "./codex-portable-compatibility/errors";
 import type { ProxySession } from "./session";
 
 const CODEX_MULTI_AGENT_V2_TOOL_NAMES = new Set(["spawn_agent", "send_message", "followup_task"]);
@@ -84,20 +84,16 @@ export class ProxyCodexMultiAgentV2Gate {
     if (mode === "native") return null;
 
     if (mode === "disabled") {
-      return ProxyResponses.buildError(
-        400,
-        "The selected provider has disabled Codex MultiAgentV2 requests.",
-        "codex_multi_agent_v2_provider_disabled"
-      );
+      throw new PortableCompatibilityError("provider_disabled", {
+        providerId: session.provider?.id,
+      });
     }
 
     const settings = await getCachedSystemSettings();
     if (!settings.enableCodexMultiAgentV2Compatibility) {
-      return ProxyResponses.buildError(
-        400,
-        "Codex MultiAgentV2 compatibility is not enabled.",
-        "codex_multi_agent_v2_compatibility_disabled"
-      );
+      throw new PortableCompatibilityError("feature_disabled", {
+        providerId: session.provider?.id,
+      });
     }
 
     // Ticket 02 performs portable payload encoding. Ticket 01 only gates it.

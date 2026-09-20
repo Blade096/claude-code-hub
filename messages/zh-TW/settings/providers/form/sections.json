@@ -402,7 +402,7 @@
         "portable": "Portable 相容",
         "disabled": "停用"
       },
-      "portableWarning": "委派任務內容會以明文經過 CCH 與第三方供應商，同時還必須啟用系統總開關。"
+      "portableWarning": "委派任務內容會以明文經過 CCH 與第三方供應商，同時還必須啟用系統總開關。明確啟用 STORE_SESSION_MESSAGES 或 Langfuse 會記錄完整 payload，請限制存取權限與保留期限。"
     },
     "options": {
       "title": "選項",

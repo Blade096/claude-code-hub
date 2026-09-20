@@ -343,6 +343,13 @@ describe("portable compatibility over Responses WebSocket", () => {
       },
     });
     expect(opened.metadata.responseRestore).toBe("restored");
+    expect(opened.metadata.audit).toMatchObject({
+      state: "response_restored",
+      actualTransport: "websocket",
+      responseRestore: "restored",
+      errorCategory: null,
+      responseId: "resp_single",
+    });
     expect(turn.session.getPortableTransformationMetadata()).toBeNull();
   });
 
@@ -619,7 +626,12 @@ describe("portable compatibility over Responses WebSocket", () => {
     expect(failedBody).toContain("compatibility_restore_failed");
     expect(failedBody).not.toContain("Trigger an isolated response mapping error.");
     expect(failed.metadata.responseRestore).toBe("failed");
-    expect(failed.metadata.audit.errorCategory).toBe("compatibility_restore_failed");
+    expect(failed.metadata.audit).toMatchObject({
+      state: "failed",
+      actualTransport: "websocket",
+      responseRestore: "failed",
+      errorCategory: "compatibility_restore_failed",
+    });
     expect(failedTurn.session.getPortableTransformationMetadata()).toBeNull();
     expect(getResponsesWsSessionCountForTests()).toBe(0);
 

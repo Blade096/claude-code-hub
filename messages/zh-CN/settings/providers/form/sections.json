@@ -56,7 +56,7 @@
         "portable": "Portable 兼容",
         "disabled": "禁用"
       },
-      "portableWarning": "委派任务正文会以明文经过 CCH 和第三方供应商，同时还需要开启系统总开关。"
+      "portableWarning": "委派任务正文会以明文经过 CCH 和第三方供应商，同时还需要开启系统总开关。显式启用 STORE_SESSION_MESSAGES 或 Langfuse 会记录完整 payload，请限制访问权限与保留期。"
     },
     "options": {
       "title": "选项",

@@ -13,6 +13,7 @@ export default createCoverageConfig({
     "tests/unit/proxy/codex-portable-websocket.test.ts",
     "tests/unit/proxy/remote-compaction-synthesizer.test.ts",
     "tests/unit/proxy/portable-audit.test.ts",
+    "tests/unit/proxy/portable-error-handler.test.ts",
     "tests/unit/proxy/portable-errors.test.ts",
   ],
   sourceFiles: [

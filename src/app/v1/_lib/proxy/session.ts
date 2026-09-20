@@ -118,6 +118,11 @@ export class ProxySession {
   provider: Provider | null;
   messageContext: MessageContext | null;
 
+  // The Provider selected by the guard pipeline before retries, switches, or
+  // hedge attempts. Portable audit records it separately from the attempt
+  // that ultimately handles the request.
+  private requestedProvider: Pick<Provider, "id" | "name"> | null = null;
+
   // Time To First Byte (ms). Streaming: first chunk. Non-stream: equals durationMs.
   ttfbMs: number | null = null;
 
@@ -372,10 +377,17 @@ export class ProxySession {
   }
 
   setProvider(provider: Provider | null): void {
+    if (provider && this.requestedProvider === null) {
+      this.requestedProvider = { id: provider.id, name: provider.name };
+    }
     this.provider = provider;
     if (provider) {
       this.providerType = provider.providerType as ProviderType;
     }
+  }
+
+  getRequestedProvider(): Pick<Provider, "id" | "name"> | null {
+    return this.requestedProvider;
   }
 
   recordProviderSessionRef(providerId: number): void {

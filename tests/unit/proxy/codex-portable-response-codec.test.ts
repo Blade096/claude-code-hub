@@ -265,7 +265,13 @@ describe("Codex MultiAgentV2 portable response codec", () => {
       output: [{ namespace: "collaboration", name: "spawn_agent" }],
     });
     expect(state.responseRestore).toBe("restored");
-    expect(state.audit.responseRestore).toBe("restored");
+    expect(state.audit).toMatchObject({
+      state: "response_restored",
+      actualTransport: "http",
+      responseRestore: "restored",
+      errorCategory: null,
+      responseId: "resp_1",
+    });
     expect(JSON.stringify(state.audit)).not.toContain("delegated task");
   });
 
@@ -278,7 +284,13 @@ describe("Codex MultiAgentV2 portable response codec", () => {
       )
     ).rejects.toMatchObject({ compatibilityCode: "malformed_response" });
     expect(nonJsonState.responseRestore).toBe("failed");
-    expect(nonJsonState.audit.errorCategory).toBe("compatibility_restore_failed");
+    expect(nonJsonState.audit).toMatchObject({
+      state: "failed",
+      actualTransport: "http",
+      responseRestore: "failed",
+      errorCategory: "compatibility_restore_failed",
+      responseId: null,
+    });
 
     await expect(
       restorePortableCompatibilityResponse(

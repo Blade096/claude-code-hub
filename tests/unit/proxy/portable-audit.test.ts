@@ -23,13 +23,15 @@ function makeSession(stream = false): ProxySession {
     provider: { id: 22, name: "actual-provider" },
     messageContext: { id: 101 },
     sessionId: "session-202",
+    getRequestedProvider: () => ({ id: 11, name: "requested-provider" }),
+    getOriginalModel: () => "requested-model",
     getCurrentModel: () => "actual-model",
     getSpecialSettings: () => settings,
     addSpecialSetting: (setting: SpecialSetting) => settings.push(setting),
   } as unknown as ProxySession;
 }
 
-const provider = { id: 11, name: "requested-provider" } as Provider;
+const provider = { id: 22, name: "actual-provider" } as Provider;
 
 function metadata(audit: ReturnType<typeof createPortableCompatibilityAudit>) {
   return {
@@ -73,7 +75,9 @@ describe("portable compatibility audit", () => {
       requestedTransport: transport,
       actualTransport: transport,
       requestedProviderId: 11,
-      actualProviderId: 11,
+      requestedProviderName: "requested-provider",
+      actualProviderId: 22,
+      actualProviderName: "actual-provider",
       requestedModel: "requested-model",
       actualModel: "actual-model",
       state: "response_restored",
@@ -111,7 +115,7 @@ describe("portable compatibility audit", () => {
     const session = makeSession(false);
     const audit = recordPortableFailureAudit(
       session,
-      new PortableCompatibilityError("provider_disabled", { providerId: 11 })
+      new PortableCompatibilityError("provider_disabled", { providerId: 22 })
     );
 
     expect(audit).toMatchObject({

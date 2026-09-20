@@ -46,7 +46,7 @@ function createSession(
     headers: new Headers(),
     userAgent: "Codex Desktop/1.2.3",
     request: { message },
-    provider: { codexMultiAgentV2Mode: mode },
+    provider: { id: 42, name: "fixture-provider", codexMultiAgentV2Mode: mode },
   } as unknown as ProxySession;
 }
 
@@ -58,10 +58,13 @@ describe("Codex MultiAgentV2 provider gate", () => {
     });
   });
 
-  test("runs immediately after final provider selection", () => {
+  test("runs after final provider selection and message-context creation", () => {
     const providerIndex = CHAT_PIPELINE.steps.indexOf("provider");
+    const messageContextIndex = CHAT_PIPELINE.steps.indexOf("messageContext");
+    const compatibilityIndex = CHAT_PIPELINE.steps.indexOf("codexMultiAgentV2");
     expect(providerIndex).toBeGreaterThan(-1);
-    expect(CHAT_PIPELINE.steps[providerIndex + 1]).toBe("codexMultiAgentV2");
+    expect(messageContextIndex).toBeGreaterThan(providerIndex);
+    expect(compatibilityIndex).toBeGreaterThan(messageContextIndex);
   });
 
   test("recognizes top-level and additional_tools collaboration schemas", () => {
@@ -125,28 +128,36 @@ describe("Codex MultiAgentV2 provider gate", () => {
   });
 
   test("rejects confirmed V2 requests when the provider disables them", async () => {
-    const response = await ProxyCodexMultiAgentV2Gate.ensure(createSession("disabled"));
-
-    expect(response?.status).toBe(400);
-    await expect(response?.json()).resolves.toMatchObject({
-      error: {
-        type: "codex_multi_agent_v2_provider_disabled",
-        code: "codex_multi_agent_v2_provider_disabled",
-      },
-    });
+    await expect(ProxyCodexMultiAgentV2Gate.ensure(createSession("disabled"))).rejects.toMatchObject(
+      {
+        compatibilityCode: "provider_disabled",
+        category: "compatibility_provider_disabled",
+        providerId: 42,
+      }
+    );
     expect(mocks.getCachedSystemSettings).not.toHaveBeenCalled();
   });
 
   test("rejects portable mode while the global feature is off", async () => {
-    const response = await ProxyCodexMultiAgentV2Gate.ensure(createSession("portable"));
+    await expect(ProxyCodexMultiAgentV2Gate.ensure(createSession("portable"))).rejects.toMatchObject(
+      {
+        compatibilityCode: "feature_disabled",
+        category: "compatibility_feature_disabled",
+        providerId: 42,
+      }
+    );
+  });
 
-    expect(response?.status).toBe(400);
-    await expect(response?.json()).resolves.toMatchObject({
-      error: {
-        type: "codex_multi_agent_v2_compatibility_disabled",
-        code: "codex_multi_agent_v2_compatibility_disabled",
-      },
+  test("gate failures never include delegated content", async () => {
+    const sentinel = "PORTABLE_TASK_SENTINEL_GATE_74A2";
+    const session = createSession("disabled", {
+      tools: [collaborationNamespace()],
+      input: [{ type: "agent_message", content: [{ type: "input_text", text: sentinel }] }],
     });
+
+    const failure = await ProxyCodexMultiAgentV2Gate.ensure(session).catch((error) => error);
+    expect(JSON.stringify(failure)).not.toContain(sentinel);
+    expect(failure.message).not.toContain(sentinel);
   });
 
   test("allows portable mode when the global feature is on without transforming payload", async () => {

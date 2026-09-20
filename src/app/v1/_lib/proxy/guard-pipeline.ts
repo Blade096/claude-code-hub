@@ -219,9 +219,9 @@ export const CHAT_PIPELINE: GuardConfig = {
     "requestFilter",
     "rateLimit",
     "provider",
-    "codexMultiAgentV2",
     "providerRequestFilter",
     "messageContext",
+    "codexMultiAgentV2",
   ],
 };
 
@@ -238,8 +238,8 @@ export const RAW_SAFE_SESSION_PIPELINE: GuardConfig = {
     "probe",
     "session",
     "provider",
-    "codexMultiAgentV2",
     "messageContext",
+    "codexMultiAgentV2",
   ],
 };
 

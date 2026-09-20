@@ -216,7 +216,8 @@ export async function buildFakeStreamingNonStreamResponse(
 
 function safeRunnerErrorCode(error: unknown): string {
   const errorType = (error as { errorType?: unknown } | null)?.errorType;
-  return typeof errorType === "string" && errorType.startsWith("codex_multi_agent_v2_")
+  return typeof errorType === "string" &&
+    (errorType.startsWith("codex_multi_agent_v2_") || errorType.startsWith("compatibility_"))
     ? errorType
     : "runner_error";
 }

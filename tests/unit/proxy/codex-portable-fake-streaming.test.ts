@@ -186,7 +186,7 @@ describe("portable MultiAgentV2 fake-streaming bypass", () => {
     expect(response).not.toBeNull();
     const body = await response!.text();
 
-    expect(body).toContain("codex_multi_agent_v2_provider_transport_unsupported");
+    expect(body).toContain("compatibility_transport_unsupported");
     expect(body).not.toContain("hello");
     expect(session.isFakeStreamingAttempt()).toBe(false);
     expect(session.getPortableTransformationMetadata?.()).toBeUndefined();

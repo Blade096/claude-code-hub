@@ -8,6 +8,7 @@ export default createCoverageConfig({
     "tests/unit/proxy/codex-portable-request-codec.test.ts",
     "tests/unit/proxy/codex-portable-response-codec.test.ts",
     "tests/unit/proxy/codex-portable-sse-transform.test.ts",
+    "tests/unit/proxy/codex-portable-websocket.test.ts",
   ],
   sourceFiles: ["src/app/v1/_lib/proxy/codex-portable-compatibility/**/*.ts"],
   thresholds: {

@@ -467,6 +467,118 @@ describe("portable compatibility proxy seams", () => {
     }
   );
 
+  test("routes portable WebSocket frames through the shared response restore chain", async () => {
+    const provider = makeProvider();
+    const session = makeSession(provider, { stream: true });
+    mocks.isWebsocketClientRequest.mockReturnValue(true);
+    mocks.evaluateResponsesWsEligibility.mockResolvedValue({
+      isWebsocketClient: true,
+      eligible: true,
+    });
+    let upstreamBody: Record<string, unknown> | null = null;
+    mocks.tryResponsesWebsocketUpstream.mockImplementationOnce(async (options) => {
+      upstreamBody = options.body;
+      const events = [
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: {
+            id: "ws_item",
+            type: "function_call",
+            call_id: "ws_call",
+            namespace: "collaboration-optimize",
+            name: "spawn_agent",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          item_id: "ws_item",
+          output_index: 0,
+          delta: '{"message":"child task"}',
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: {
+            id: "ws_item",
+            type: "function_call",
+            call_id: "ws_call",
+            namespace: "collaboration-optimize",
+            name: "spawn_agent",
+            arguments: '{"message":"child task"}',
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            output: [
+              {
+                id: "ws_item",
+                type: "function_call",
+                call_id: "ws_call",
+                namespace: "collaboration-optimize",
+                name: "spawn_agent",
+                arguments: '{"message":"child task"}',
+              },
+            ],
+          },
+        },
+      ];
+      return {
+        response: new Response(
+          events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+          { status: 200, headers: { "content-type": "text/event-stream" } }
+        ),
+        connected: true,
+        reused: false,
+      };
+    });
+    const fetch = vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode");
+    const { doForward } = ProxyForwarder as unknown as {
+      doForward: (session: ProxySession, provider: Provider, baseUrl: string) => Promise<Response>;
+    };
+
+    const upstreamResponse = await doForward(session, provider, provider.url);
+    vi.spyOn(ProxyResponseHandler as never, "handleStream").mockImplementationOnce(
+      async (_session: ProxySession, response: Response) => response
+    );
+    const clientResponse = await ProxyResponseHandler.dispatch(session, upstreamResponse);
+    const responseText = await clientResponse.text();
+
+    expect(upstreamBody).toMatchObject({
+      stream: true,
+      tools: [{ name: "collaboration-optimize" }],
+      input: [
+        {
+          type: "message",
+          content: [
+            { type: "input_text", text: "Payload:\n" },
+            { type: "input_text", text: "Complete the seam test task." },
+          ],
+        },
+      ],
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(responseText).toContain('"namespace":"collaboration","name":"spawn_agent"');
+    expect(responseText).toContain('"type":"response.function_call_arguments.delta"');
+    expect(session.getPortableTransformationMetadata()).toBeNull();
+    expect(session.getSpecialSettings()).toContainEqual(
+      expect.objectContaining({
+        type: "codex_multi_agent_v2_portable",
+        providerId: provider.id,
+        responseRestore: "restored",
+      })
+    );
+    expect(JSON.stringify(session.getSpecialSettings())).not.toContain(
+      "Complete the seam test task"
+    );
+    const loggedArguments = Object.values(mocks.logger).flatMap(
+      (loggerMethod) => loggerMethod.mock.calls
+    );
+    expect(JSON.stringify(loggedArguments)).not.toContain("Complete the seam test task");
+  });
+
   test("keeps a native SSE request and every response frame unchanged", async () => {
     const provider = { ...makeProvider(), codexMultiAgentV2Mode: "native" as const };
     const session = makeSession(provider, { stream: true });

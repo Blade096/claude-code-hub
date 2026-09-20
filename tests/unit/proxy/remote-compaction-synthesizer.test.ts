@@ -49,14 +49,17 @@ type FakeSession = {
   session: ProxySession;
   sentBodies: Record<string, unknown>[];
   singleAttemptCalls: boolean[];
+  internalCompactionCalls: boolean[];
   abortSignals: (AbortSignal | null)[];
 };
 
 function makeSession(options: { remoteCompactionV2: boolean; trackUsage?: boolean }): FakeSession {
   const sentBodies: Record<string, unknown>[] = [];
   const singleAttemptCalls: boolean[] = [];
+  const internalCompactionCalls: boolean[] = [];
   const abortSignals: (AbortSignal | null)[] = [];
   let singleAttempt = false;
+  let internalCompaction = false;
   const request = {
     message: {
       model: "deepseek-v4-pro",
@@ -125,11 +128,22 @@ function makeSession(options: { remoteCompactionV2: boolean; trackUsage?: boolea
       singleAttempt = enabled;
     },
     isSingleAttemptMode: () => singleAttempt,
+    setInternalCompactionRequest(enabled: boolean) {
+      internalCompactionCalls.push(enabled);
+      internalCompaction = enabled;
+    },
+    isInternalCompactionRequest: () => internalCompaction,
     getEndpointPolicy: () =>
       singleAttempt ? SINGLE_ATTEMPT_ENDPOINT_POLICY : resolveEndpointPolicy("/v1/responses"),
   } as unknown as ProxySession;
 
-  return { session, sentBodies, singleAttemptCalls, abortSignals };
+  return {
+    session,
+    sentBodies,
+    singleAttemptCalls,
+    internalCompactionCalls,
+    abortSignals,
+  };
 }
 
 /** 内存版 Redis KV，用于验证幂等缓存行为。 */
@@ -344,7 +358,7 @@ describe("remote compaction synthesis", () => {
   });
 
   it("restores the original session request after the summary call", async () => {
-    const { session } = makeSession({ remoteCompactionV2: true });
+    const { session, internalCompactionCalls } = makeSession({ remoteCompactionV2: true });
     const originalMessage = session.request.message;
     const originalBuffer = session.request.buffer;
 
@@ -355,15 +369,18 @@ describe("remote compaction synthesis", () => {
       })
     );
 
-    await tryRemoteCompactionSynthesis(session);
+    const response = await tryRemoteCompactionSynthesis(session);
+    await response!.text();
 
     expect(session.request.message).toBe(originalMessage);
     expect(session.request.buffer).toBe(originalBuffer);
     expect(session.request.model).toBe("deepseek-v4-pro");
+    expect(internalCompactionCalls).toEqual([true, false]);
+    expect(session.isInternalCompactionRequest()).toBe(false);
   });
 
   it("fails loudly when the upstream summary call fails", async () => {
-    const { session } = makeSession({ remoteCompactionV2: true });
+    const { session, internalCompactionCalls } = makeSession({ remoteCompactionV2: true });
     sendMock.mockResolvedValue(
       new Response(JSON.stringify({ error: { message: "boom" } }), { status: 500 })
     );
@@ -374,6 +391,8 @@ describe("remote compaction synthesis", () => {
     const events = sseEvents(await response!.text());
     expect(events.at(-1)?.event).toBe("response.failed");
     expect(JSON.stringify(events.at(-1)?.data)).toContain("远程压缩失败");
+    expect(internalCompactionCalls).toEqual([true, false]);
+    expect(session.isInternalCompactionRequest()).toBe(false);
   });
 
   it("fails when the upstream returns no usable text", async () => {
@@ -602,14 +621,17 @@ describe("remote compaction synthesis", () => {
     expect(session.clientAbortSignal).toBe(clientController.signal);
   });
 
-  it("uses a single-attempt policy for the summary request and restores it", async () => {
-    const { session, singleAttemptCalls } = makeSession({ remoteCompactionV2: true });
+  it("uses isolated internal flags for the summary request and restores them", async () => {
+    const { session, singleAttemptCalls, internalCompactionCalls } = makeSession({
+      remoteCompactionV2: true,
+    });
     expect(session.getEndpointPolicy().allowRetry).toBe(true);
 
     sendMock.mockImplementation(async (s: ProxySession) => {
       const policy = s.getEndpointPolicy();
       expect(policy.allowRetry).toBe(false);
       expect(policy.allowProviderSwitch).toBe(false);
+      expect(s.isInternalCompactionRequest()).toBe(true);
       return new Response(JSON.stringify({ output: [{ content: [{ text: "summary" }] }] }), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -620,6 +642,8 @@ describe("remote compaction synthesis", () => {
     await response!.text();
 
     expect(singleAttemptCalls).toEqual([true, false]);
+    expect(internalCompactionCalls).toEqual([true, false]);
+    expect(session.isInternalCompactionRequest()).toBe(false);
     expect(session.getEndpointPolicy().allowRetry).toBe(true);
   });
 
@@ -627,7 +651,7 @@ describe("remote compaction synthesis", () => {
     vi.useFakeTimers();
     try {
       const records = installInMemoryCacheStore();
-      const { session, abortSignals, singleAttemptCalls } = makeSession({
+      const { session, abortSignals, singleAttemptCalls, internalCompactionCalls } = makeSession({
         remoteCompactionV2: true,
       });
       // 上游只在自身 signal 被 abort 时收敛，用来说明超时真的会终止请求
@@ -656,6 +680,8 @@ describe("remote compaction synthesis", () => {
       expect(body).toContain("response.failed");
       expect(session.clientAbortSignal).toBeNull();
       expect(singleAttemptCalls).toEqual([true, false]);
+      expect(internalCompactionCalls).toEqual([true, false]);
+      expect(session.isInternalCompactionRequest()).toBe(false);
       expect(records.size).toBe(0);
 
       // 内部超时必须记为 timeout，而不是「客户端中断」

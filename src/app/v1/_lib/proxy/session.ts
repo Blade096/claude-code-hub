@@ -150,6 +150,11 @@ export class ProxySession {
    */
   private internalSingleAttemptMode = false;
 
+  // CCH-owned remote-compaction summary request. This is intentionally
+  // separate from single-attempt mode because other internal calls also use
+  // that retry policy but must not be excluded from protocol classification.
+  private internalCompactionRequest = false;
+
   // 模型重定向追踪：保存原始模型名（重定向前）
   private originalModelName: string | null = null;
 
@@ -440,6 +445,14 @@ export class ProxySession {
   /** 读取当前是否处于单次尝试模式，便于调用方按作用域恢复。 */
   isSingleAttemptMode(): boolean {
     return this.internalSingleAttemptMode;
+  }
+
+  setInternalCompactionRequest(enabled: boolean): void {
+    this.internalCompactionRequest = enabled;
+  }
+
+  isInternalCompactionRequest(): boolean {
+    return this.internalCompactionRequest;
   }
 
   isRawCrossProviderFallbackEnabled(): boolean {

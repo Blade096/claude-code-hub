@@ -62,6 +62,20 @@ function resolveMode(session: ProxySession): CodexMultiAgentV2Mode {
   return session.provider?.codexMultiAgentV2Mode ?? "native";
 }
 
+/**
+ * Read-only portable preflight shared by transport-adjacent paths that must
+ * decide before mutating the request. Internal compaction summary calls are
+ * deliberately excluded even though they retain the outer request's tools.
+ */
+export function isPortableCodexMultiAgentV2Request(
+  session: ProxySession,
+  compatibilityEnabled: boolean
+): boolean {
+  if (!compatibilityEnabled) return false;
+  if (session.isInternalCompactionRequest?.() === true) return false;
+  return resolveMode(session) === "portable" && isCodexMultiAgentV2Request(session);
+}
+
 export class ProxyCodexMultiAgentV2Gate {
   static async ensure(session: ProxySession): Promise<Response | null> {
     if (!isCodexMultiAgentV2Request(session)) return null;

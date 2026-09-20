@@ -651,4 +651,20 @@ describe("Codex MultiAgentV2 portable request codec", () => {
       })
     ).rejects.toMatchObject({ compatibilityCode: "name_collision" });
   });
+
+  test("leaves CCH-owned remote compaction summary requests outside the codec", async () => {
+    const request = makeRequest();
+    const session = makeSession(request);
+    session.isInternalCompactionRequest = () => true;
+
+    const result = await preparePortableCompatibilityRequest({
+      session,
+      provider: makeProvider("portable"),
+      request,
+    });
+
+    expect(result).toEqual({ request, metadata: null });
+    expect(result.request).toBe(request);
+    expect(mocks.getCachedSystemSettings).not.toHaveBeenCalled();
+  });
 });

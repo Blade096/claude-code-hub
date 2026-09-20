@@ -82,6 +82,10 @@ import { resolveEndpointPolicy } from "@/app/v1/_lib/proxy/endpoint-policy";
 import { handleProxyRequest } from "@/app/v1/_lib/proxy-handler";
 import { ProxyForwarder } from "@/app/v1/_lib/proxy/forwarder";
 import { ProxyResponseHandler } from "@/app/v1/_lib/proxy/response-handler";
+import {
+  encodeCompactionSummary,
+  expandCompactionReplayItems,
+} from "@/app/v1/_lib/proxy/remote-compaction";
 import { ProxySession } from "@/app/v1/_lib/proxy/session";
 import type { Provider } from "@/types/provider";
 import { Hono } from "hono";
@@ -577,6 +581,125 @@ describe("portable compatibility proxy seams", () => {
       (loggerMethod) => loggerMethod.mock.calls
     );
     expect(JSON.stringify(loggedArguments)).not.toContain("Complete the seam test task");
+  });
+
+  test("transforms an expanded compaction replay exactly once before the portable attempt", async () => {
+    const provider = makeProvider();
+    const token = encodeCompactionSummary({
+      summary: "Earlier work is complete; continue with the bounded child task.",
+      model: "third-party-model",
+      createdAtSeconds: 1_700_000_000,
+    });
+    const replay = expandCompactionReplayItems([{ type: "compaction", encrypted_content: token }]);
+    expect(replay.expanded).toBe(1);
+    const agentMessage = (makeSession(provider).request.message.input as unknown[])[0];
+    const session = makeSession(provider, {
+      input: [...replay.items, agentMessage],
+    });
+    let upstreamBody: Record<string, unknown> | null = null;
+    vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode").mockImplementationOnce(
+      async (_url: string, init: RequestInit) => {
+        upstreamBody = JSON.parse(bodyText(init.body));
+        return new Response(JSON.stringify({ output: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+    );
+    const { doForward } = ProxyForwarder as unknown as {
+      doForward: (session: ProxySession, provider: Provider, baseUrl: string) => Promise<Response>;
+    };
+
+    await doForward(session, provider, provider.url);
+
+    expect(upstreamBody).toMatchObject({
+      tools: [{ name: "collaboration-optimize" }],
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: expect.stringContaining("Earlier work is complete"),
+            },
+          ],
+        },
+        {
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_text", text: "Payload:\n" },
+            { type: "input_text", text: "Complete the seam test task." },
+          ],
+        },
+      ],
+    });
+    expect(JSON.stringify(upstreamBody).match(/collaboration-optimize/gu)).toHaveLength(1);
+    expect(session.getPortableTransformationMetadata()?.transformations).toEqual([
+      "spawn_agent_message_schema",
+      "collaboration_namespace",
+      "agent_message_input",
+    ]);
+    expect(session.getSpecialSettings()).toHaveLength(1);
+  });
+
+  test("keeps native collaboration wrappers unchanged after compaction replay expansion", async () => {
+    const provider = { ...makeProvider(), codexMultiAgentV2Mode: "native" as const } as Provider;
+    const token = encodeCompactionSummary({
+      summary: "Native checkpoint summary.",
+      model: "third-party-model",
+      createdAtSeconds: 1_700_000_000,
+    });
+    const replay = expandCompactionReplayItems([{ type: "compaction", encrypted_content: token }]);
+    const originalAgentMessage = (makeSession(provider).request.message.input as unknown[])[0];
+    const session = makeSession(provider, {
+      input: [...replay.items, originalAgentMessage],
+    });
+    let upstreamBody: Record<string, unknown> | null = null;
+    vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode").mockImplementationOnce(
+      async (_url: string, init: RequestInit) => {
+        upstreamBody = JSON.parse(bodyText(init.body));
+        return new Response(JSON.stringify({ output: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+    );
+    const { doForward } = ProxyForwarder as unknown as {
+      doForward: (session: ProxySession, provider: Provider, baseUrl: string) => Promise<Response>;
+    };
+
+    await doForward(session, provider, provider.url);
+
+    expect(upstreamBody).toMatchObject({
+      tools: [
+        {
+          name: "collaboration",
+          tools: [
+            { name: "spawn_agent", parameters: { properties: { message: { encrypted: true } } } },
+          ],
+        },
+      ],
+      input: [
+        {
+          type: "message",
+          content: [{ type: "input_text", text: expect.stringContaining("Native checkpoint") }],
+        },
+        {
+          type: "agent_message",
+          content: [
+            { type: "input_text", text: "Payload:\n" },
+            {
+              type: "encrypted_content",
+              encrypted_content: "Complete the seam test task.",
+            },
+          ],
+        },
+      ],
+    });
+    expect(session.getPortableTransformationMetadata()).toBeNull();
+    expect(session.getSpecialSettings()).toBeNull();
   });
 
   test("keeps a native SSE request and every response frame unchanged", async () => {

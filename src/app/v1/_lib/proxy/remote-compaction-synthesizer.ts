@@ -391,9 +391,11 @@ async function runSummaryRequest(
   const internalAbort = new AbortController();
   const previousAbortSignal = session.clientAbortSignal;
   const previousSingleAttemptMode = session.isSingleAttemptMode();
+  const previousInternalCompactionRequest = session.isInternalCompactionRequest();
   const timeout = setTimeout(() => internalAbort.abort(), SUMMARY_TIMEOUT_MS);
   session.setInternalRequestAbortSignal(internalAbort.signal);
   session.setSingleAttemptMode(true);
+  session.setInternalCompactionRequest(true);
 
   try {
     session.request.message = summaryBody;
@@ -431,6 +433,7 @@ async function runSummaryRequest(
     clearTimeout(timeout);
     session.setInternalRequestAbortSignal(previousAbortSignal);
     session.setSingleAttemptMode(previousSingleAttemptMode);
+    session.setInternalCompactionRequest(previousInternalCompactionRequest);
     session.request.message = snapshot.message;
     session.request.model = snapshot.model;
     session.request.buffer = snapshot.buffer;

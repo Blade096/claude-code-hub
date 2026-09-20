@@ -1,5 +1,6 @@
 import { logger } from "@/lib/logger";
 import type { SystemSettings } from "@/types/system-config";
+import { isPortableCodexMultiAgentV2Request } from "../codex-multi-agent-v2-gate";
 import type { ClientFormat } from "../format-mapper";
 import { ProxyForwarder } from "../forwarder";
 import type { ProxySession } from "../session";
@@ -46,6 +47,18 @@ export async function tryFakeStreamingPath(
   session: ProxySession,
   systemSettings: SystemSettings
 ): Promise<Response | null> {
+  // Portable collaboration responses require the real JSON/SSE/WS response
+  // restoration pipeline. This read-only preflight must run before the fake
+  // path mutates the request into a non-stream attempt.
+  if (
+    isPortableCodexMultiAgentV2Request(
+      session,
+      systemSettings.enableCodexMultiAgentV2Compatibility ?? false
+    )
+  ) {
+    return null;
+  }
+
   const clientModel = (session.request.model ?? "").toString();
   const providerGroup = session.provider?.groupTag ?? null;
   const eligible = isFakeStreamingEligible(

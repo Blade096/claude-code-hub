@@ -362,6 +362,9 @@ export async function preparePortableCompatibilityRequest({
   provider: Provider;
   request: Record<string, unknown>;
 }): Promise<PortablePreparation> {
+  if (session.isInternalCompactionRequest?.() === true) {
+    return { request, metadata: null };
+  }
   const isMultiAgentV2 = isCodexMultiAgentV2Request(session);
   const mode = provider.codexMultiAgentV2Mode ?? "native";
 

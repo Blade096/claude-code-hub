@@ -131,6 +131,8 @@
       "ip": "IP",
       "provider": "Поставщик",
       "model": "Модель тарификации",
+      "reasoningEffort": "Интенсивность рассуждений",
+      "reasoningEffortTooltip": "Интенсивность рассуждений для запроса этой модели",
       "endpoint": "Эндпоинт",
       "inputTokens": "Вход",
       "outputTokens": "Выход",
@@ -378,6 +380,16 @@
         "label": "Effort",
         "overridden": "Переопределено провайдером",
         "tooltip": "Уровень усилий на размышления, запрошенный клиентом (output_config.effort); показан как есть — прокси не переименовывает и не преобразует уровни."
+      },
+      "reasoningEffort": {
+        "label": "Интенсивность рассуждений",
+        "overridden": "Переопределено провайдером",
+        "tooltip": "Интенсивность рассуждений в запросе Codex (reasoning.effort), показанная без изменений."
+      },
+      "reasoningEffortOpenai": {
+        "label": "Интенсивность рассуждений",
+        "overridden": "Переопределено провайдером",
+        "tooltip": "Интенсивность рассуждений в запросе OpenAI chat/completions (reasoning_effort / reasoning.effort), показанная без изменений."
       },
       "logicTrace": {
         "title": "Цепочка решений",

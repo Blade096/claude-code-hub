@@ -745,12 +745,19 @@ export async function tryResponsesWebsocketUpstream(options: {
     async start(controller) {
       let sawTerminalEvent = false;
 
-      const writeLine = (obj: string) => {
-        controller.enqueue(encoder.encode(`data: ${obj}\n\n`));
+      const writeEvent = (payload: string) => {
+        // SSE 要求 payload 的每个物理行都有 data: 前缀。部分上游会返回
+        // pretty-printed JSON；若只给首行加前缀，下游只能收到一个孤立的“{”。
+        const normalizedPayload = payload.replace(/\r\n?/g, "\n");
+        const dataLines = normalizedPayload
+          .split("\n")
+          .map((line) => `data: ${line}`)
+          .join("\n");
+        controller.enqueue(encoder.encode(`${dataLines}\n\n`));
       };
 
       const processText = (text: string): boolean => {
-        writeLine(text);
+        writeEvent(text);
         try {
           const parsed = JSON.parse(text);
           if (parsed && typeof parsed.type === "string" && TERMINAL_EVENT_TYPES.has(parsed.type)) {

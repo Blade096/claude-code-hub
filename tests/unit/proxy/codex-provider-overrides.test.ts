@@ -182,6 +182,63 @@ describe("Codex 供应商级参数覆写", () => {
     ]);
   });
 
+  it("当强制 image_generation=false 时，应同时移除 namespace 与 additional_tools 声明", () => {
+    const provider = {
+      providerType: "codex",
+      codexImageGenerationPreference: "false",
+    };
+    const input: Record<string, unknown> = {
+      model: "gpt-5.5",
+      tools: [
+        { type: "namespace", name: "image_gen" },
+        { type: "function", name: "lookup_weather" },
+      ],
+      input: [
+        {
+          type: "additional_tools",
+          tools: [
+            { type: "namespace", namespace: "image_gen" },
+            { type: "function", name: "search" },
+          ],
+        },
+      ],
+      tool_choice: { type: "namespace", name: "image_gen" },
+    };
+
+    const output = applyCodexProviderOverrides(provider as any, input);
+
+    expect(output.tools).toEqual([{ type: "function", name: "lookup_weather" }]);
+    expect(output.input).toEqual([
+      { type: "additional_tools", tools: [{ type: "function", name: "search" }] },
+    ]);
+    expect(output.tool_choice).toBe("none");
+  });
+
+  it("当 additional_tools 已声明 image_gen namespace 时，启用图片能力不应重复注入", () => {
+    const provider = {
+      providerType: "codex",
+      codexImageGenerationPreference: "true",
+    };
+    const input: Record<string, unknown> = {
+      model: "gpt-5.5",
+      input: [
+        {
+          type: "additional_tools",
+          tools: [{ type: "namespace", name: "image_gen" }],
+        },
+      ],
+      tool_choice: { type: "allowed_tools", tools: [] },
+    };
+
+    const output = applyCodexProviderOverrides(provider as any, input);
+
+    expect(output.tools).toBeUndefined();
+    expect(output.tool_choice).toEqual({
+      type: "allowed_tools",
+      tools: [{ type: "namespace", name: "image_gen" }],
+    });
+  });
+
   it("当强制 image_generation=false 且 tool_choice 直接指向 image_generation 时，应移除该选择", () => {
     const provider = {
       providerType: "codex",

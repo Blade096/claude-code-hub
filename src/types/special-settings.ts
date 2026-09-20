@@ -16,6 +16,8 @@ export type SpecialSetting =
   | CodexSessionIdCompletionSpecialSetting
   | ClaudeMetadataUserIdInjectionSpecialSetting
   | AnthropicEffortSpecialSetting
+  | CodexReasoningEffortSpecialSetting
+  | OpenAIReasoningEffortSpecialSetting
   | AnthropicCacheTtlHeaderOverrideSpecialSetting
   | AnthropicContext1mHeaderOverrideSpecialSetting
   | LongContextPricingSpecialSetting
@@ -87,6 +89,26 @@ export type AnthropicEffortSpecialSetting = {
   scope: "request";
   hit: boolean;
   effort: string;
+};
+
+/** Codex Responses 请求中的 reasoning.effort 审计。 */
+export type CodexReasoningEffortSpecialSetting = {
+  type: "codex_reasoning_effort";
+  scope: "request";
+  hit: boolean;
+  effort: string;
+};
+
+/** OpenAI Chat Completions 思考强度字段来源。 */
+export type OpenAIReasoningEffortFieldSource = "reasoning_effort" | "reasoning.effort";
+
+/** OpenAI-compatible Chat Completions 请求中的思考强度审计。 */
+export type OpenAIReasoningEffortSpecialSetting = {
+  type: "openai_reasoning_effort";
+  scope: "request";
+  hit: boolean;
+  effort: string;
+  source: OpenAIReasoningEffortFieldSource;
 };
 
 /**

@@ -1,4 +1,7 @@
+import { normalizeEndpointPath, V1_ENDPOINT_PATHS } from "@/app/v1/_lib/proxy/endpoint-paths";
 import { extractAnthropicEffortFromRequestBody } from "@/lib/utils/anthropic-effort";
+import { extractCodexReasoningEffortFromRequestBody } from "@/lib/utils/codex-reasoning-effort";
+import { extractOpenAIReasoningEffortFromRequestBody } from "@/lib/utils/openai-reasoning-effort";
 import { createMessageRequest } from "@/repository/message";
 import type { ProxySession } from "./session";
 
@@ -45,6 +48,41 @@ export class ProxyMessageService {
           scope: "request",
           hit: true,
           effort: anthropicEffort,
+        });
+      }
+    }
+
+    const hasCodexReasoningEffortAudit = session
+      .getSpecialSettings()
+      ?.some((setting) => setting.type === "codex_reasoning_effort");
+    if (provider.providerType === "codex" && !hasCodexReasoningEffortAudit) {
+      const effort = extractCodexReasoningEffortFromRequestBody(session.request.message);
+      if (effort) {
+        session.addSpecialSetting({
+          type: "codex_reasoning_effort",
+          scope: "request",
+          hit: true,
+          effort,
+        });
+      }
+    }
+
+    const hasOpenAIReasoningEffortAudit = session
+      .getSpecialSettings()
+      ?.some((setting) => setting.type === "openai_reasoning_effort");
+    if (
+      provider.providerType === "openai-compatible" &&
+      normalizeEndpointPath(endpoint ?? "") === V1_ENDPOINT_PATHS.CHAT_COMPLETIONS &&
+      !hasOpenAIReasoningEffortAudit
+    ) {
+      const extraction = extractOpenAIReasoningEffortFromRequestBody(session.request.message);
+      if (extraction) {
+        session.addSpecialSetting({
+          type: "openai_reasoning_effort",
+          scope: "request",
+          hit: true,
+          effort: extraction.effort,
+          source: extraction.source,
         });
       }
     }

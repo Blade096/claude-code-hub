@@ -130,6 +130,50 @@ describe("tryResponsesWebsocketUpstream", () => {
     expect(body).toContain('"type":"response.completed"');
   });
 
+  it("preserves pretty-printed multiline JSON as complete SSE events", async () => {
+    const events = [
+      { type: "response.created", response: { id: "resp_pretty" } },
+      { type: "response.output_text.delta", delta: "hello" },
+      {
+        type: "response.completed",
+        response: { id: "resp_pretty", usage: { input_tokens: 2, output_tokens: 1 } },
+      },
+    ];
+    server = await startMockServer((socket) => {
+      socket.on("message", () => {
+        for (const event of events) {
+          socket.send(JSON.stringify(event, null, 2).replace(/\n/g, "\r\n"));
+        }
+      });
+    });
+
+    const result = await tryResponsesWebsocketUpstream({
+      provider: codexProvider(),
+      upstreamUrl: `http://127.0.0.1:${server.port}/v1/responses`,
+      upstreamHeaders: new Headers({ authorization: "Bearer sk-mock" }),
+      body: { model: "gpt-5.5", input: "hi" },
+    });
+
+    expect("response" in result).toBe(true);
+    if (!("response" in result)) return;
+
+    const body = await collectSseBody(result.response);
+    const parsed = body
+      .trim()
+      .split("\n\n")
+      .map((frame) =>
+        frame
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).replace(/^ /, ""))
+          .join("\n")
+      )
+      .map((payload) => JSON.parse(payload));
+
+    expect(parsed).toEqual(events);
+    expect(body.match(/^data:/gm)?.length).toBeGreaterThan(events.length);
+  });
+
   it("returns failure when upstream rejects the WS upgrade", async () => {
     // Create a plain http server that returns 404 on /v1/responses to simulate
     // providers that don't speak WS on that path.

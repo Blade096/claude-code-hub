@@ -45,6 +45,7 @@ import type { BillingModelSource } from "@/types/system-config";
 import { ErrorDetailsDialog } from "./error-details-dialog";
 import { ModelDisplayWithRedirect } from "./model-display-with-redirect";
 import { ProviderChainPopover } from "./provider-chain-popover";
+import { ThinkingEffortDisplay } from "./thinking-effort-display";
 
 const BATCH_SIZE = 50;
 const ROW_HEIGHT = 52; // Estimated row height in pixels
@@ -146,6 +147,7 @@ export function VirtualizedLogsTable({
   const hideCacheColumn = hiddenColumns?.includes("cache") ?? false;
   const hideCostColumn = hiddenColumns?.includes("cost") ?? false;
   const hidePerformanceColumn = hiddenColumns?.includes("performance") ?? false;
+  const hideReasoningEffortColumn = hiddenColumns?.includes("reasoningEffort") ?? false;
 
   // Dialog state for model redirect click and chain item click
   const [dialogState, setDialogState] = useState<{
@@ -692,6 +694,14 @@ export function VirtualizedLogsTable({
               >
                 {t("logs.columns.model")}
               </div>
+              {hideReasoningEffortColumn ? null : (
+                <div
+                  className="flex-[0.6] min-w-[64px] px-1.5 truncate"
+                  title={t("logs.columns.reasoningEffortTooltip")}
+                >
+                  {t("logs.columns.reasoningEffort")}
+                </div>
+              )}
               {hideTokensColumn ? null : (
                 <div
                   className="flex-[0.7] min-w-[70px] text-right px-1.5 truncate"
@@ -995,6 +1005,12 @@ export function VirtualizedLogsTable({
                         </Tooltip>
                       </TooltipProvider>
                     </div>
+
+                    {hideReasoningEffortColumn ? null : (
+                      <div className="relative z-20 flex-[0.6] min-w-[64px] overflow-visible px-1.5 font-mono text-xs">
+                        <ThinkingEffortDisplay specialSettings={log.specialSettings} />
+                      </div>
+                    )}
 
                     {/* Tokens */}
                     {hideTokensColumn ? null : (

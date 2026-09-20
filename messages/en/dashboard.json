@@ -131,6 +131,8 @@
       "ip": "IP",
       "provider": "Provider",
       "model": "Billing Model",
+      "reasoningEffort": "Reasoning Effort",
+      "reasoningEffortTooltip": "Thinking effort of the model request",
       "endpoint": "Endpoint",
       "inputTokens": "Input",
       "outputTokens": "Output",
@@ -378,6 +380,16 @@
         "label": "Effort",
         "overridden": "Overridden by provider",
         "tooltip": "Thinking effort requested by the client (output_config.effort), shown verbatim. The proxy does not rename or convert levels."
+      },
+      "reasoningEffort": {
+        "label": "Reasoning effort",
+        "overridden": "Overridden by provider",
+        "tooltip": "Thinking effort in the Codex request (reasoning.effort), shown verbatim."
+      },
+      "reasoningEffortOpenai": {
+        "label": "Reasoning effort",
+        "overridden": "Overridden by provider",
+        "tooltip": "Thinking effort in the OpenAI chat/completions request (reasoning_effort / reasoning.effort), shown verbatim."
       },
       "logicTrace": {
         "title": "Decision Chain",

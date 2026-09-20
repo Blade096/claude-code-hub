@@ -824,6 +824,59 @@ describe("extractUsageMetrics", () => {
   });
 
   describe("openai-compatible cached_tokens subset normalization", () => {
+    it("should extract Responses cache_write_tokens and exclude both cache buckets", () => {
+      const response = JSON.stringify({
+        usage: {
+          input_tokens: 240951,
+          input_tokens_details: {
+            cached_tokens: 240128,
+            cache_write_tokens: 740,
+          },
+          output_tokens: 58,
+        },
+      });
+
+      const result = parseUsageFromResponseText(response, "codex");
+
+      expect(result.usageMetrics?.input_tokens).toBe(83);
+      expect(result.usageMetrics?.cache_creation_input_tokens).toBe(740);
+      expect(result.usageMetrics?.cache_read_input_tokens).toBe(240128);
+      expect(result.usageMetrics?.output_tokens).toBe(58);
+    });
+
+    it("should preserve a top-level cache creation bucket over nested cache_write_tokens", () => {
+      const response = JSON.stringify({
+        usage: {
+          input_tokens: 1000,
+          cache_creation_input_tokens: 200,
+          input_tokens_details: {
+            cached_tokens: 300,
+            cache_write_tokens: 50,
+          },
+        },
+      });
+
+      const result = parseUsageFromResponseText(response, "openai-compatible");
+
+      expect(result.usageMetrics?.input_tokens).toBe(700);
+      expect(result.usageMetrics?.cache_creation_input_tokens).toBe(200);
+      expect(result.usageMetrics?.cache_read_input_tokens).toBe(300);
+    });
+
+    it("should ignore invalid nested cache_write_tokens", () => {
+      const response = JSON.stringify({
+        usage: {
+          input_tokens: 1000,
+          input_tokens_details: { cached_tokens: 300, cache_write_tokens: -1 },
+        },
+      });
+
+      const result = parseUsageFromResponseText(response, "openai-compatible");
+
+      expect(result.usageMetrics?.input_tokens).toBe(700);
+      expect(result.usageMetrics?.cache_creation_input_tokens).toBeUndefined();
+    });
+
     it("should subtract Chat Completions cached_tokens from input_tokens (non-stream)", () => {
       const response = JSON.stringify({
         usage: {

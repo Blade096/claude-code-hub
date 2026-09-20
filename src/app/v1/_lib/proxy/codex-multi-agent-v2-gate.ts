@@ -2,13 +2,16 @@ import { getCachedSystemSettings } from "@/lib/config";
 import type { CodexMultiAgentV2Mode } from "@/types/provider";
 import { detectClientFull } from "./client-detector";
 import { PortableCompatibilityError } from "./codex-portable-compatibility/errors";
+import { isRecord } from "./codex-portable-compatibility/guards";
+import {
+  CODEX_COLLABORATION_NAMESPACE,
+  PORTABLE_COLLABORATION_ACTIONS,
+} from "./codex-portable-compatibility/types";
 import type { ProxySession } from "./session";
 
-const CODEX_MULTI_AGENT_V2_TOOL_NAMES = new Set(["spawn_agent", "send_message", "followup_task"]);
+const CODEX_MULTI_AGENT_V2_TOOL_NAMES = new Set<string>(PORTABLE_COLLABORATION_ACTIONS);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+type CollaborationSchemaClassification = "absent" | "valid" | "malformed";
 
 function hasEncryptedMessageParameter(tool: unknown): boolean {
   if (!isRecord(tool) || tool.type !== "function") return false;
@@ -26,14 +29,37 @@ function hasEncryptedMessageParameter(tool: unknown): boolean {
   return isRecord(message) && message.type === "string" && message.encrypted === true;
 }
 
-function hasCollaborationNamespace(tools: unknown): boolean {
-  if (!Array.isArray(tools)) return false;
+function classifyCollaborationNamespace(tools: unknown): CollaborationSchemaClassification {
+  if (!Array.isArray(tools)) return "absent";
 
-  return tools.some((tool) => {
-    if (!isRecord(tool)) return false;
-    if (tool.type !== "namespace" || tool.name !== "collaboration") return false;
-    return Array.isArray(tool.tools) && tool.tools.some(hasEncryptedMessageParameter);
-  });
+  let foundCollaborationNamespace = false;
+  for (const tool of tools) {
+    if (!isRecord(tool)) continue;
+    if (tool.type !== "namespace" || tool.name !== CODEX_COLLABORATION_NAMESPACE) continue;
+    foundCollaborationNamespace = true;
+    if (Array.isArray(tool.tools) && tool.tools.some(hasEncryptedMessageParameter)) {
+      return "valid";
+    }
+  }
+  return foundCollaborationNamespace ? "malformed" : "absent";
+}
+
+function classifyCodexMultiAgentV2ToolSchema(
+  message: Record<string, unknown>
+): CollaborationSchemaClassification {
+  const topLevel = classifyCollaborationNamespace(message.tools);
+  if (topLevel === "valid") return "valid";
+
+  let malformed = topLevel === "malformed";
+  if (Array.isArray(message.input)) {
+    for (const item of message.input) {
+      if (!isRecord(item) || item.type !== "additional_tools") continue;
+      const nested = classifyCollaborationNamespace(item.tools);
+      if (nested === "valid") return "valid";
+      malformed ||= nested === "malformed";
+    }
+  }
+  return malformed ? "malformed" : "absent";
 }
 
 /**
@@ -42,20 +68,20 @@ function hasCollaborationNamespace(tools: unknown): boolean {
  * namespace is considered MultiAgentV2 traffic.
  */
 export function hasCodexMultiAgentV2ToolSchema(message: Record<string, unknown>): boolean {
-  if (hasCollaborationNamespace(message.tools)) return true;
+  return classifyCodexMultiAgentV2ToolSchema(message) === "valid";
+}
 
-  if (!Array.isArray(message.input)) return false;
-  return message.input.some(
-    (item) =>
-      isRecord(item) && item.type === "additional_tools" && hasCollaborationNamespace(item.tools)
-  );
+function isOfficialCodexResponsesRequest(session: ProxySession): boolean {
+  if (session.originalFormat !== "response") return false;
+  if (session.requestUrl.pathname.replace(/\/+$/, "") !== "/v1/responses") return false;
+  return detectClientFull(session, "codex-cli").matched;
 }
 
 export function isCodexMultiAgentV2Request(session: ProxySession): boolean {
-  if (session.originalFormat !== "response") return false;
-  if (session.requestUrl.pathname.replace(/\/+$/, "") !== "/v1/responses") return false;
-  if (!detectClientFull(session, "codex-cli").matched) return false;
-  return hasCodexMultiAgentV2ToolSchema(session.request.message);
+  return (
+    isOfficialCodexResponsesRequest(session) &&
+    classifyCodexMultiAgentV2ToolSchema(session.request.message) === "valid"
+  );
 }
 
 function resolveMode(session: ProxySession): CodexMultiAgentV2Mode {
@@ -78,10 +104,20 @@ export function isPortableCodexMultiAgentV2Request(
 
 export class ProxyCodexMultiAgentV2Gate {
   static async ensure(session: ProxySession): Promise<Response | null> {
-    if (!isCodexMultiAgentV2Request(session)) return null;
+    if (!isOfficialCodexResponsesRequest(session)) return null;
+
+    const schema = classifyCodexMultiAgentV2ToolSchema(session.request.message);
+    if (schema === "absent") return null;
 
     const mode = resolveMode(session);
     if (mode === "native") return null;
+
+    if (schema === "malformed") {
+      throw new PortableCompatibilityError("client_or_protocol_mismatch", {
+        fieldPath: "tools",
+        providerId: session.provider?.id,
+      });
+    }
 
     if (mode === "disabled") {
       throw new PortableCompatibilityError("provider_disabled", {

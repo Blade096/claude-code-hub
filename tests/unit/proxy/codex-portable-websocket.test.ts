@@ -26,6 +26,7 @@ import {
   tryResponsesWebsocketUpstream,
 } from "@/app/v1/_lib/responses-ws/upstream-adapter";
 import type { Provider } from "@/types/provider";
+import { makeCollaborationNamespace as collaborationNamespace } from "./_helpers/codex-portable-fixtures";
 
 type ServerHandle = {
   port: number;
@@ -74,25 +75,6 @@ function portableProvider(): Provider {
     groupTag: null,
     providerVendorId: null,
   } as unknown as Provider;
-}
-
-function collaborationNamespace(action: PortableCollaborationAction) {
-  return {
-    type: "namespace",
-    name: "collaboration",
-    tools: [
-      {
-        type: "function",
-        name: action,
-        parameters: {
-          type: "object",
-          properties: {
-            message: { type: "string", encrypted: true },
-          },
-        },
-      },
-    ],
-  };
 }
 
 function makeTurn(action: PortableCollaborationAction, taskText: string): PortableTurn {
@@ -404,6 +386,7 @@ describe("portable compatibility over Responses WebSocket", () => {
     expect(retained).toHaveLength(1);
     expect(Object.keys(retained[0]!).sort()).toEqual([
       "active",
+      "availabilityWaiters",
       "createdAt",
       "fingerprint",
       "idleTimer",
@@ -417,7 +400,7 @@ describe("portable compatibility over Responses WebSocket", () => {
     expect(JSON.stringify(receivedFrames)).not.toContain('"encrypted_content"');
   });
 
-  test("isolates interleaved turns that share the lower-layer WS session id", async () => {
+  test("isolates concurrent turns queued on the same lower-layer WS connection", async () => {
     let connectionCount = 0;
     let releaseFirstTerminal!: () => void;
     const firstTerminalReleased = new Promise<void>((resolve) => {
@@ -425,11 +408,10 @@ describe("portable compatibility over Responses WebSocket", () => {
     });
     server = await startMockServer((socket) => {
       connectionCount += 1;
-      const connectionIndex = connectionCount;
       socket.on("message", (data) => {
         const frame = JSON.parse(data.toString("utf8")) as Record<string, unknown>;
         const action = actionFromRequestFrame(frame);
-        if (connectionIndex !== 1) {
+        if (action === "followup_task") {
           sendFunctionCallEvents(socket, action, "resp_concurrent_second");
           return;
         }
@@ -488,19 +470,21 @@ describe("portable compatibility over Responses WebSocket", () => {
     const firstBodyPromise = restoreTurnResponse(firstTurn, first.response, first.metadata);
 
     const secondTurn = makeTurn("followup_task", "Concurrent second task.");
-    const second = await openTurn({
+    let secondResolved = false;
+    const secondPromise = openTurn({
       turn: secondTurn,
       port: server.port,
       sessionId: "portable-concurrent-turns",
+    }).then((result) => {
+      secondResolved = true;
+      return result;
     });
-    const secondBody = await restoreTurnResponse(secondTurn, second.response, second.metadata);
 
-    expect(connectionCount).toBe(2);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(secondResolved).toBe(false);
+    expect(connectionCount).toBe(1);
     expect(first.reused).toBe(false);
-    expect(second.reused).toBe(false);
-    expect(secondBody).toContain('"namespace":"collaboration","name":"followup_task"');
-    expect(secondBody).not.toContain('"name":"spawn_agent"');
-    expect(secondTurn.session.getPortableTransformationMetadata()).toBeNull();
+    expect(secondTurn.session.getPortableTransformationMetadata()).not.toBeNull();
     expect(firstTurn.session.getPortableTransformationMetadata()).toBe(first.metadata);
     expect(getResponsesWsSessionCountForTests()).toBe(1);
 
@@ -509,6 +493,14 @@ describe("portable compatibility over Responses WebSocket", () => {
     expect(firstBody).toContain('"namespace":"collaboration","name":"spawn_agent"');
     expect(firstBody).not.toContain('"name":"followup_task"');
     expect(firstTurn.session.getPortableTransformationMetadata()).toBeNull();
+
+    const second = await secondPromise;
+    const secondBody = await restoreTurnResponse(secondTurn, second.response, second.metadata);
+    expect(second.reused).toBe(true);
+    expect(secondBody).toContain('"namespace":"collaboration","name":"followup_task"');
+    expect(secondBody).not.toContain('"name":"spawn_agent"');
+    expect(secondTurn.session.getPortableTransformationMetadata()).toBeNull();
+    expect(connectionCount).toBe(1);
   });
 
   test("client cancellation clears only that turn metadata and the next turn remains usable", async () => {

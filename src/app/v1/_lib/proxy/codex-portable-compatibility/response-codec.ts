@@ -10,6 +10,7 @@ import { PortableCompatibilityError } from "./errors";
 import { isRecord } from "./guards";
 import { transformPortableSseResponse } from "./sse-transform";
 import {
+  CODEX_COLLABORATION_NAMESPACE,
   PORTABLE_COLLABORATION_ACTIONS,
   PORTABLE_COLLABORATION_NAMESPACE,
   type PortableCollaborationAction,
@@ -18,7 +19,7 @@ import {
   type PortableTransformationMetadata,
 } from "./types";
 
-const ORIGINAL_COLLABORATION_NAMESPACE = "collaboration";
+const ORIGINAL_COLLABORATION_NAMESPACE = CODEX_COLLABORATION_NAMESPACE;
 const COLLABORATION_ACTIONS = new Set<string>(PORTABLE_COLLABORATION_ACTIONS);
 
 function isCollaborationAction(value: string): value is PortableCollaborationAction {

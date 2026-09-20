@@ -3,7 +3,7 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 
 export type QualificationProviderKind = "deepseek" | "glm";
 export type QualificationHistoryMode = "none" | "recent" | "all";
-export type QualificationTransport = "sse" | "websocket";
+export type QualificationTransport = "http" | "sse" | "websocket";
 export type QualificationResult = "passed" | "failed" | "blocked" | "unsupported";
 
 export type QualificationProvider = {
@@ -35,7 +35,13 @@ export type PortableQualificationConfig = {
 export type QualificationCase = {
   caseId: string;
   providerKind: QualificationProviderKind | "native";
-  operation: "lifecycle" | "cancellation" | "timeout" | "upstream_error" | "recovery";
+  operation:
+    | "lifecycle"
+    | "http_non_stream"
+    | "cancellation"
+    | "timeout"
+    | "upstream_error"
+    | "recovery";
   historyMode: QualificationHistoryMode;
   transport: QualificationTransport;
   expected: "success" | "capability_error" | "failure_then_recovery";
@@ -300,6 +306,14 @@ export function buildQualificationCases(
         expected: "success",
       });
     }
+    cases.push({
+      caseId: `${kind}_http_non_stream`,
+      providerKind: kind,
+      operation: "http_non_stream",
+      historyMode: "none",
+      transport: "http",
+      expected: "success",
+    });
     cases.push({
       caseId: `${kind}_lifecycle_none_websocket`,
       providerKind: kind,

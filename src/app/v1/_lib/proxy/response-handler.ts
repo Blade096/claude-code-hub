@@ -472,6 +472,14 @@ function cleanResponseHeaders(headers: Headers): Headers {
   return cleaned;
 }
 
+function isPortableCompatibilitySession(session: ProxySession): boolean {
+  return (
+    session
+      .getSpecialSettings()
+      ?.some((setting) => setting.type === "codex_multi_agent_v2_portable") ?? false
+  );
+}
+
 function ensurePricingResolutionSpecialSetting(
   session: ProxySession,
   resolvedPricing: Awaited<ReturnType<ProxySession["getResolvedPricingByBillingSource"]>>
@@ -1385,7 +1393,10 @@ export class ProxyResponseHandler {
             statusCode: targetResponse.status,
           },
         },
-        session.requestSequence
+        session.requestSequence,
+        {
+          portableCompatibility: isPortableCompatibilitySession(session),
+        }
       );
       responseAfterSnapshotTask?.catch((err) => {
         logger.error("[ResponseHandler] Failed to store response after snapshot:", err);
@@ -1438,7 +1449,10 @@ export class ProxyResponseHandler {
               void SessionManager.storeSessionResponse(
                 session.sessionId,
                 responseText,
-                session.requestSequence
+                session.requestSequence,
+                {
+                  portableCompatibility: isPortableCompatibilitySession(session),
+                }
               ).catch((err) => {
                 logger.error("[ResponseHandler] Failed to store response:", err);
               });
@@ -1447,7 +1461,10 @@ export class ProxyResponseHandler {
                 session.sessionId,
                 "before",
                 { body: beforeBody },
-                session.requestSequence
+                session.requestSequence,
+                {
+                  portableCompatibility: isPortableCompatibilitySession(session),
+                }
               );
               responseBeforeSnapshotTask?.catch((err) => {
                 logger.error("[ResponseHandler] Failed to store response before snapshot:", err);
@@ -1457,7 +1474,10 @@ export class ProxyResponseHandler {
                 session.sessionId,
                 "after",
                 { body: responseText },
-                session.requestSequence
+                session.requestSequence,
+                {
+                  portableCompatibility: isPortableCompatibilitySession(session),
+                }
               );
               responseAfterSnapshotTask?.catch((err) => {
                 logger.error("[ResponseHandler] Failed to store response after snapshot:", err);
@@ -1559,7 +1579,10 @@ export class ProxyResponseHandler {
                 statusCode: response.status,
               },
             },
-            session.requestSequence
+            session.requestSequence,
+            {
+              portableCompatibility: isPortableCompatibilitySession(session),
+            }
           );
           responseAfterMetaTask?.catch((err) => {
             logger.error("[ResponseHandler] Failed to store non-stream response after meta:", err);
@@ -1743,7 +1766,10 @@ export class ProxyResponseHandler {
           void SessionManager.storeSessionResponse(
             session.sessionId,
             responseText,
-            session.requestSequence
+            session.requestSequence,
+            {
+              portableCompatibility: isPortableCompatibilitySession(session),
+            }
           ).catch((err) => {
             logger.error("[ResponseHandler] Failed to store response:", err);
           });
@@ -1752,7 +1778,10 @@ export class ProxyResponseHandler {
             session.sessionId,
             "before",
             { body: beforeBody },
-            session.requestSequence
+            session.requestSequence,
+            {
+              portableCompatibility: isPortableCompatibilitySession(session),
+            }
           );
           responseBeforeSnapshotTask?.catch((err) => {
             logger.error("[ResponseHandler] Failed to store response before snapshot:", err);
@@ -2274,7 +2303,10 @@ export class ProxyResponseHandler {
               void SessionManager.storeSessionResponse(
                 session.sessionId,
                 allContent,
-                session.requestSequence
+                session.requestSequence,
+                {
+                  portableCompatibility: isPortableCompatibilitySession(session),
+                }
               ).catch((err) => {
                 logger.error("[ResponseHandler] Failed to store stream passthrough response:", err);
               });
@@ -2283,7 +2315,10 @@ export class ProxyResponseHandler {
                 session.sessionId,
                 "before",
                 { body: allContent },
-                session.requestSequence
+                session.requestSequence,
+                {
+                  portableCompatibility: isPortableCompatibilitySession(session),
+                }
               );
               responseBeforeSnapshotTask?.catch((err) => {
                 logger.error("[ResponseHandler] Failed to store response before snapshot:", err);
@@ -2293,7 +2328,10 @@ export class ProxyResponseHandler {
                 session.sessionId,
                 "after",
                 { body: allContent },
-                session.requestSequence
+                session.requestSequence,
+                {
+                  portableCompatibility: isPortableCompatibilitySession(session),
+                }
               );
               responseAfterSnapshotTask?.catch((err) => {
                 logger.error("[ResponseHandler] Failed to store response after snapshot:", err);
@@ -2493,7 +2531,10 @@ export class ProxyResponseHandler {
                 statusCode: response.status,
               },
             },
-            session.requestSequence
+            session.requestSequence,
+            {
+              portableCompatibility: isPortableCompatibilitySession(session),
+            }
           );
           responseAfterMetaTask?.catch((err) => {
             logger.error("[ResponseHandler] Failed to store stream response after meta:", err);
@@ -2742,7 +2783,10 @@ export class ProxyResponseHandler {
           void SessionManager.storeSessionResponse(
             session.sessionId,
             allContent,
-            session.requestSequence
+            session.requestSequence,
+            {
+              portableCompatibility: isPortableCompatibilitySession(session),
+            }
           ).catch((err) => {
             logger.error("[ResponseHandler] Failed to store response:", err);
           });
@@ -2751,7 +2795,10 @@ export class ProxyResponseHandler {
             session.sessionId,
             "after",
             { body: allContent },
-            session.requestSequence
+            session.requestSequence,
+            {
+              portableCompatibility: isPortableCompatibilitySession(session),
+            }
           );
           responseAfterSnapshotTask?.catch((err) => {
             logger.error("[ResponseHandler] Failed to store response after snapshot:", err);
@@ -2761,7 +2808,10 @@ export class ProxyResponseHandler {
             session.sessionId,
             "before",
             { body: beforeBody },
-            session.requestSequence
+            session.requestSequence,
+            {
+              portableCompatibility: isPortableCompatibilitySession(session),
+            }
           );
           responseBeforeSnapshotTask?.catch((err) => {
             logger.error("[ResponseHandler] Failed to store response before snapshot:", err);

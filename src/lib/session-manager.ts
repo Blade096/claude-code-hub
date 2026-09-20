@@ -1545,7 +1545,8 @@ export class SessionManager {
   static async storeSessionResponse(
     sessionId: string,
     response: string | object,
-    requestSequence?: number
+    requestSequence?: number,
+    options: { portableCompatibility?: boolean } = {}
   ): Promise<void> {
     // 允许通过环境变量显式关闭响应体存储（例如隐私/节省 Redis 内存）。
     // 注意：这里仅关闭“写入 Redis”这一步；调用方仍然可能在内存中读取响应体用于统计或错误检测。
@@ -1565,7 +1566,13 @@ export class SessionManager {
         if (typeof response === "object") {
           responseString = JSON.stringify(redactResponseBody(response));
         } else {
-          responseString = redactResponseText(response);
+          try {
+            responseString = JSON.stringify(redactResponseBody(JSON.parse(response) as unknown));
+          } catch {
+            responseString = options.portableCompatibility
+              ? redactResponseText(response)
+              : response;
+          }
         }
       }
 
@@ -2131,7 +2138,8 @@ export class SessionManager {
     sessionId: string,
     phase: SessionDetailViewMode,
     snapshot: SessionDetailResponseSnapshotInput,
-    requestSequence?: number
+    requestSequence?: number,
+    options: { portableCompatibility?: boolean } = {}
   ): Promise<void> {
     const redis = getRedisClient();
     if (!redis || redis.status !== "ready") return;
@@ -2148,7 +2156,13 @@ export class SessionManager {
 
           if (!SessionManager.STORE_MESSAGES) {
             if (typeof bodyToStore === "string") {
-              bodyToStore = redactResponseText(bodyToStore);
+              try {
+                bodyToStore = JSON.stringify(
+                  redactResponseBody(JSON.parse(bodyToStore) as unknown)
+                );
+              } catch {
+                if (options.portableCompatibility) bodyToStore = redactResponseText(bodyToStore);
+              }
             } else if (bodyToStore !== null) {
               bodyToStore = JSON.stringify(redactResponseBody(bodyToStore));
             }

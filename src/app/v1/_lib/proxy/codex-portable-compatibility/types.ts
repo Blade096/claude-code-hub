@@ -1,6 +1,7 @@
 import type { CodexMultiAgentV2PortableSpecialSetting } from "@/types/special-settings";
 
 export const PORTABLE_COLLABORATION_NAMESPACE = "collaboration-optimize";
+export const CODEX_COLLABORATION_NAMESPACE = "collaboration";
 
 export const PORTABLE_COLLABORATION_ACTIONS = [
   "spawn_agent",

@@ -7,6 +7,7 @@ import {
 import { CHAT_PIPELINE } from "@/app/v1/_lib/proxy/guard-pipeline";
 import type { ProxySession } from "@/app/v1/_lib/proxy/session";
 import type { CodexMultiAgentV2Mode } from "@/types/provider";
+import { makeCollaborationNamespace as collaborationNamespace } from "./_helpers/codex-portable-fixtures";
 
 const mocks = vi.hoisted(() => ({
   getCachedSystemSettings: vi.fn(),
@@ -16,25 +17,6 @@ vi.mock("@/lib/config", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/config")>()),
   getCachedSystemSettings: mocks.getCachedSystemSettings,
 }));
-
-function collaborationNamespace(name = "spawn_agent") {
-  return {
-    type: "namespace",
-    name: "collaboration",
-    tools: [
-      {
-        type: "function",
-        name,
-        parameters: {
-          type: "object",
-          properties: {
-            message: { type: "string", encrypted: true },
-          },
-        },
-      },
-    ],
-  };
-}
 
 function createSession(
   mode: CodexMultiAgentV2Mode,
@@ -104,6 +86,21 @@ describe("Codex MultiAgentV2 provider gate", () => {
     ).toBe(false);
   });
 
+  test("fails closed for malformed collaboration schemas from official Codex Responses", async () => {
+    const malformed = collaborationNamespace();
+    malformed.tools[0]!.parameters.properties.message = {
+      type: "string",
+    } as { type: string; encrypted: boolean };
+    const session = createSession("portable", { tools: [malformed] });
+
+    await expect(ProxyCodexMultiAgentV2Gate.ensure(session)).rejects.toMatchObject({
+      compatibilityCode: "client_or_protocol_mismatch",
+      category: "compatibility_client_or_protocol_mismatch",
+      providerId: 42,
+    });
+    expect(mocks.getCachedSystemSettings).not.toHaveBeenCalled();
+  });
+
   test("requires Responses endpoint, response format, and official Codex client", () => {
     const wrongRoute = createSession("disabled");
     wrongRoute.requestUrl = new URL("https://example.test/v1/chat/completions");
@@ -128,24 +125,24 @@ describe("Codex MultiAgentV2 provider gate", () => {
   });
 
   test("rejects confirmed V2 requests when the provider disables them", async () => {
-    await expect(ProxyCodexMultiAgentV2Gate.ensure(createSession("disabled"))).rejects.toMatchObject(
-      {
-        compatibilityCode: "provider_disabled",
-        category: "compatibility_provider_disabled",
-        providerId: 42,
-      }
-    );
+    await expect(
+      ProxyCodexMultiAgentV2Gate.ensure(createSession("disabled"))
+    ).rejects.toMatchObject({
+      compatibilityCode: "provider_disabled",
+      category: "compatibility_provider_disabled",
+      providerId: 42,
+    });
     expect(mocks.getCachedSystemSettings).not.toHaveBeenCalled();
   });
 
   test("rejects portable mode while the global feature is off", async () => {
-    await expect(ProxyCodexMultiAgentV2Gate.ensure(createSession("portable"))).rejects.toMatchObject(
-      {
-        compatibilityCode: "feature_disabled",
-        category: "compatibility_feature_disabled",
-        providerId: 42,
-      }
-    );
+    await expect(
+      ProxyCodexMultiAgentV2Gate.ensure(createSession("portable"))
+    ).rejects.toMatchObject({
+      compatibilityCode: "feature_disabled",
+      category: "compatibility_feature_disabled",
+      providerId: 42,
+    });
   });
 
   test("gate failures never include delegated content", async () => {

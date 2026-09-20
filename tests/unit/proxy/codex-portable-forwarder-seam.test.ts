@@ -89,33 +89,10 @@ import {
 import { ProxySession } from "@/app/v1/_lib/proxy/session";
 import type { Provider } from "@/types/provider";
 import { Hono } from "hono";
-
-type CollaborationAction = "spawn_agent" | "send_message" | "followup_task";
-
-const COLLABORATION_ACTIONS: CollaborationAction[] = [
-  "spawn_agent",
-  "send_message",
-  "followup_task",
-];
-
-function spawnAgentNamespace(action: CollaborationAction = "spawn_agent") {
-  return {
-    type: "namespace",
-    name: "collaboration",
-    tools: [
-      {
-        type: "function",
-        name: action,
-        parameters: {
-          type: "object",
-          properties: {
-            message: { type: "string", encrypted: true },
-          },
-        },
-      },
-    ],
-  };
-}
+import {
+  COLLABORATION_ACTIONS,
+  makeCollaborationNamespace as spawnAgentNamespace,
+} from "./_helpers/codex-portable-fixtures";
 
 function makeProvider(): Provider {
   return {

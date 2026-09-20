@@ -116,6 +116,7 @@ type PersistentWsEntry = {
   createdAt: number;
   lastUsedAt: number;
   idleTimer: ReturnType<typeof setTimeout> | null;
+  availabilityWaiters: Array<(available: boolean) => void>;
 };
 
 type PersistentWsState = {
@@ -231,6 +232,33 @@ function forgetPersistentSession(sessionId: string, ws?: WebSocketType): void {
     entry.idleTimer = null;
   }
   persistentSessions.delete(sessionId);
+  for (const resolve of entry.availabilityWaiters.splice(0)) resolve(false);
+}
+
+function waitForPersistentAvailability(
+  entry: PersistentWsEntry,
+  abortSignal?: AbortSignal
+): Promise<boolean> {
+  if (!entry.active) return Promise.resolve(true);
+  if (abortSignal?.aborted) return Promise.resolve(false);
+
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const finish = (available: boolean) => {
+      if (settled) return;
+      settled = true;
+      abortSignal?.removeEventListener("abort", onAbort);
+      resolve(available);
+    };
+    const onAbort = () => {
+      const index = entry.availabilityWaiters.indexOf(finish);
+      if (index >= 0) entry.availabilityWaiters.splice(index, 1);
+      finish(false);
+    };
+
+    entry.availabilityWaiters.push(finish);
+    abortSignal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function closePersistentEntry(entry: PersistentWsEntry, code: number): void {
@@ -292,6 +320,7 @@ function registerPersistentSession(
     createdAt: Date.now(),
     lastUsedAt: Date.now(),
     idleTimer: null,
+    availabilityWaiters: [],
   };
 
   ws.on("close", () => {
@@ -364,24 +393,40 @@ export async function tryResponsesWebsocketUpstream(options: {
 
   let persistentEntry: PersistentWsEntry | null = null;
   let reused = false;
-  let canRetainFreshSession = Boolean(sessionId);
+  const canRetainFreshSession = Boolean(sessionId);
+  let reservedQueuedEntry = false;
   let ws: WebSocketType;
 
   if (sessionId) {
     const existing = persistentSessions.get(sessionId) ?? null;
     if (existing) {
+      // The cache survives dev-module reloads; upgrade entries created by an
+      // older module shape before using the request queue.
+      existing.availabilityWaiters ??= [];
       if (existing.active && !isWsClosingOrClosed(existing.ws)) {
-        logger.warn(
-          "[ResponsesWsAdapter] active upstream WS session is busy; opening a fresh one",
-          {
-            sessionId,
-          }
-        );
-        // Keep the active retained entry addressable by cleanupResponsesWsSession().
-        // The concurrent fresh socket is request-scoped and must close after its
-        // terminal event instead of replacing the in-flight session in the map.
-        canRetainFreshSession = false;
-      } else if (existing.fingerprint === fingerprint && !isWsClosingOrClosed(existing.ws)) {
+        logger.info("[ResponsesWsAdapter] queueing request on active upstream WS session", {
+          sessionId,
+        });
+        const available = await waitForPersistentAvailability(existing, options.abortSignal);
+        if (!available) {
+          return {
+            failed: true,
+            reason: "ws_error_pre_first_event",
+            message: options.abortSignal?.aborted
+              ? "aborted while waiting for the upstream WebSocket session"
+              : "upstream WebSocket session closed while the request was queued",
+            cacheableAsUnsupported: false,
+          };
+        }
+        reservedQueuedEntry = true;
+      }
+
+      if (
+        persistentSessions.get(sessionId) === existing &&
+        existing.fingerprint === fingerprint &&
+        (reservedQueuedEntry || !existing.active) &&
+        !isWsClosingOrClosed(existing.ws)
+      ) {
         persistentEntry = existing;
         persistentEntry.active = true;
         persistentEntry.lastUsedAt = Date.now();
@@ -391,7 +436,7 @@ export async function tryResponsesWebsocketUpstream(options: {
         }
         ws = existing.ws;
         reused = true;
-      } else {
+      } else if (persistentSessions.get(sessionId) === existing) {
         closePersistentEntry(existing, 1000);
       }
     }
@@ -646,14 +691,28 @@ export async function tryResponsesWebsocketUpstream(options: {
     cleanupRequestListeners();
     let closeDetachedEntry = false;
     if (persistentEntry) {
-      persistentEntry.active = false;
       persistentEntry.lastUsedAt = Date.now();
+      let handedOff = false;
+      if (!options?.closeCode && !options?.forgetSession) {
+        const nextWaiter = persistentEntry.availabilityWaiters.shift();
+        if (nextWaiter) {
+          // Reserve the entry before resolving the waiter so a newly arriving
+          // request cannot steal the connection between promise microtasks.
+          persistentEntry.active = true;
+          handedOff = true;
+          nextWaiter(true);
+        } else {
+          persistentEntry.active = false;
+        }
+      } else {
+        persistentEntry.active = false;
+      }
       const retainedForReuse = sessionId
         ? persistentSessions.get(sessionId) === persistentEntry
         : false;
       if (!retainedForReuse) {
         closeDetachedEntry = !options?.closeCode;
-      } else if (!isWsClosingOrClosed(persistentEntry.ws)) {
+      } else if (!handedOff && !isWsClosingOrClosed(persistentEntry.ws)) {
         armPersistentIdleTimer(persistentEntry);
       }
     }

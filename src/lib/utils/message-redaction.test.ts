@@ -397,6 +397,30 @@ describe("message-redaction", () => {
   });
 
   describe("redactResponseBody", () => {
+    test("redacts top-level Responses output and nested function arguments", () => {
+      const sentinel = "PORTABLE_TASK_SENTINEL_TOP_LEVEL_OUTPUT_4D2A";
+      const result = redactResponseBody({
+        id: "resp_1",
+        object: "response",
+        output: [
+          { type: "function_call", name: "spawn_agent", arguments: sentinel },
+          {
+            type: "function_call",
+            name: "send_message",
+            function: { arguments: sentinel, args: sentinel },
+          },
+        ],
+      });
+
+      expect(JSON.stringify(result)).not.toContain(sentinel);
+      expect(result).toMatchObject({
+        output: [
+          { arguments: REDACTED_MARKER },
+          { function: { arguments: REDACTED_MARKER, args: REDACTED_MARKER } },
+        ],
+      });
+    });
+
     test("should redact OpenAI choices[].message.content", () => {
       const body = {
         id: "chatcmpl-123",

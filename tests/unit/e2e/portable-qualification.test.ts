@@ -199,7 +199,7 @@ describe("portable real qualification configuration", () => {
 describe("portable real qualification matrix", () => {
   test("covers both portable families, all history modes, transport capability and faults", () => {
     const cases = buildQualificationCases("unsupported", "supported");
-    expect(cases).toHaveLength(15);
+    expect(cases).toHaveLength(17);
 
     for (const providerKind of ["deepseek", "glm"] as const) {
       const providerCases = cases.filter((item) => item.providerKind === providerKind);
@@ -209,8 +209,13 @@ describe("portable real qualification matrix", () => {
           .map((item) => item.historyMode)
       ).toEqual(["none", "recent", "all"]);
       expect(providerCases.map((item) => item.operation)).toEqual(
-        expect.arrayContaining(["cancellation", "timeout", "upstream_error"])
+        expect.arrayContaining(["http_non_stream", "cancellation", "timeout", "upstream_error"])
       );
+      expect(
+        providerCases.some(
+          (item) => item.operation === "http_non_stream" && item.transport === "http"
+        )
+      ).toBe(true);
     }
 
     expect(

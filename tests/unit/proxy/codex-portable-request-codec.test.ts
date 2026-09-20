@@ -6,6 +6,10 @@ import {
 } from "@/app/v1/_lib/proxy/codex-portable-compatibility";
 import type { ProxySession } from "@/app/v1/_lib/proxy/session";
 import type { Provider } from "@/types/provider";
+import {
+  COLLABORATION_ACTIONS,
+  makeCollaborationNamespace as spawnAgentNamespace,
+} from "./_helpers/codex-portable-fixtures";
 
 const mocks = vi.hoisted(() => ({
   getCachedSystemSettings: vi.fn(),
@@ -15,40 +19,6 @@ vi.mock("@/lib/config", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/config")>()),
   getCachedSystemSettings: mocks.getCachedSystemSettings,
 }));
-
-type CollaborationAction = "spawn_agent" | "send_message" | "followup_task";
-
-const COLLABORATION_ACTIONS: CollaborationAction[] = [
-  "spawn_agent",
-  "send_message",
-  "followup_task",
-];
-
-function spawnAgentNamespace(
-  namespace = "collaboration",
-  action: CollaborationAction = "spawn_agent"
-) {
-  return {
-    type: "namespace",
-    name: namespace,
-    description: "Collaboration tools",
-    tools: [
-      {
-        type: "function",
-        name: action,
-        description: "Spawns an agent",
-        parameters: {
-          type: "object",
-          required: ["message"],
-          properties: {
-            message: { type: "string", encrypted: true, minLength: 1 },
-            model: { type: "string" },
-          },
-        },
-      },
-    ],
-  };
-}
 
 function makeRequest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -116,7 +86,7 @@ describe("Codex MultiAgentV2 portable request codec", () => {
       )
     )
   )("handles $action in $location for $mode mode", async ({ action, location, mode }) => {
-    const namespace = spawnAgentNamespace("collaboration", action);
+    const namespace = spawnAgentNamespace(action);
     const request = makeRequest(
       location === "tools"
         ? { tools: [namespace], input: [] }
@@ -390,8 +360,8 @@ describe("Codex MultiAgentV2 portable request codec", () => {
   test("records every transformed action once in canonical order", async () => {
     const namespace = spawnAgentNamespace();
     namespace.tools.push(
-      spawnAgentNamespace("collaboration", "send_message").tools[0],
-      spawnAgentNamespace("collaboration", "followup_task").tools[0]
+      spawnAgentNamespace("send_message").tools[0],
+      spawnAgentNamespace("followup_task").tools[0]
     );
     const request = makeRequest({ tools: [namespace], input: [] });
     const result = await preparePortableCompatibilityRequest({

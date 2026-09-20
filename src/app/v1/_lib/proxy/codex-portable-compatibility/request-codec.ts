@@ -7,6 +7,7 @@ import { createPortableCompatibilityAudit } from "./audit";
 import { PortableCompatibilityError } from "./errors";
 import { isRecord } from "./guards";
 import {
+  CODEX_COLLABORATION_NAMESPACE,
   PORTABLE_COLLABORATION_ACTIONS,
   PORTABLE_COLLABORATION_NAMESPACE,
   type PortableCollaborationAction,
@@ -16,7 +17,7 @@ import {
   type PortableTransformationMetadata,
 } from "./types";
 
-const ORIGINAL_COLLABORATION_NAMESPACE = "collaboration";
+const ORIGINAL_COLLABORATION_NAMESPACE = CODEX_COLLABORATION_NAMESPACE;
 const PORTABLE_REQUEST_METADATA = Symbol("codex-portable-request-metadata");
 const COLLABORATION_ACTIONS = new Set<string>(PORTABLE_COLLABORATION_ACTIONS);
 

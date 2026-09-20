@@ -382,6 +382,16 @@ function redactCodexOutput(output: unknown[]): unknown[] {
       redactedItem.arguments = REDACTED_MARKER;
     }
 
+    if (
+      (itemType === "function_call" || itemType === "custom_tool_call") &&
+      isPlainObject(redactedItem.function)
+    ) {
+      const fn = { ...redactedItem.function };
+      if ("arguments" in fn) fn.arguments = REDACTED_MARKER;
+      if ("args" in fn) fn.args = REDACTED_MARKER;
+      redactedItem.function = fn;
+    }
+
     if ("encrypted_content" in redactedItem) {
       redactedItem.encrypted_content = REDACTED_MARKER;
     }
@@ -454,6 +464,11 @@ export function redactResponseBody(body: unknown): unknown {
   // Redact Claude content[] blocks (response format)
   if ("content" in result && Array.isArray(result.content)) {
     result.content = redactClaudeContentBlocks(result.content);
+  }
+
+  // Non-streaming Responses payloads expose output directly at the top level.
+  if ("output" in result && Array.isArray(result.output)) {
+    result.output = redactCodexOutput(result.output);
   }
 
   // Redact Gemini candidates[].content.parts[]

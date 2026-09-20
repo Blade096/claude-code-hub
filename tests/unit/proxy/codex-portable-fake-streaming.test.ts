@@ -22,27 +22,9 @@ import { preparePortableCompatibilityRequest } from "@/app/v1/_lib/proxy/codex-p
 import { tryFakeStreamingPath } from "@/app/v1/_lib/proxy/fake-streaming/proxy-integration";
 import type { ClientFormat } from "@/app/v1/_lib/proxy/format-mapper";
 import type { ProxySession } from "@/app/v1/_lib/proxy/session";
+import { makeCollaborationNamespace as collaborationNamespace } from "./_helpers/codex-portable-fixtures";
 import type { Provider } from "@/types/provider";
 import type { SystemSettings } from "@/types/system-config";
-
-function collaborationNamespace() {
-  return {
-    type: "namespace",
-    name: "collaboration",
-    tools: [
-      {
-        type: "function",
-        name: "spawn_agent",
-        parameters: {
-          type: "object",
-          properties: {
-            message: { type: "string", encrypted: true },
-          },
-        },
-      },
-    ],
-  };
-}
 
 function makeSession(options: {
   mode: "native" | "portable";

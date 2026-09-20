@@ -564,9 +564,11 @@ function validateSuccessfulLifecycle(
     "history inheritance did not match fork_turns"
   );
   requireQualification(
-    result.run.collabTools.includes("spawn_agent"),
+    ["spawn_agent", "send_message", "followup_task"].every((tool) =>
+      result.run.collabTools.includes(tool)
+    ),
     caseInfo.caseId,
-    "Codex JSONL did not contain the spawn event"
+    "Codex JSONL did not contain the complete collaboration action sequence"
   );
   const directChildText = result.run.collabAgentMessages.join("\n");
   requireQualification(
@@ -589,9 +591,12 @@ function validateSuccessfulLifecycle(
   requireQualification(restored.length >= 2, caseInfo.caseId, "child turns lack restored audits");
   for (const item of restored) {
     requireQualification(
-      item.actualProviderId === target.id && item.actualProviderName === target.name,
+      item.requestedProviderId === target.id &&
+        item.requestedProviderName === target.name &&
+        item.actualProviderId === target.id &&
+        item.actualProviderName === target.name,
       caseInfo.caseId,
-      "actual provider differs from the configured portable provider"
+      "requested or actual provider differs from the configured portable provider"
     );
     requireQualification(
       item.requestedModel === target.model && item.actualModel === target.model,
@@ -607,6 +612,11 @@ function validateSuccessfulLifecycle(
       item.responseRestore === "restored" && item.errorCategory === null,
       caseInfo.caseId,
       "response restore did not finish cleanly"
+    );
+    requireQualification(
+      item.requestId !== null && item.sessionId !== null && item.responseId !== null,
+      caseInfo.caseId,
+      "portable audit correlation identifiers are incomplete"
     );
   }
   requireQualification(
@@ -673,6 +683,32 @@ function usageItems(value: unknown): Array<Record<string, unknown>> {
     : [];
 }
 
+async function assertNativeRootUsage(
+  qualification: PortableQualificationConfig,
+  run: ParsedCodexRun,
+  caseId: string,
+  protectedValues: string[]
+): Promise<void> {
+  requireQualification(run.threadId, caseId, "native root thread id is missing");
+  let inspected: unknown = null;
+  for (let attempt = 0; attempt < 15; attempt++) {
+    inspected = await fetchUsageLogs(qualification, { sessionId: run.threadId });
+    assertNoProtectedText(inspected, protectedValues);
+    const nativeLog = usageItems(inspected).find(
+      (item) =>
+        item.providerId === qualification.native.id &&
+        item.providerName === qualification.native.name &&
+        (item.model === qualification.native.model ||
+          item.originalModel === qualification.native.model)
+    );
+    if (nativeLog) {
+      return;
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 1_000));
+  }
+  throw new Error(`Qualification ${caseId} failed: native root usage log is missing.`);
+}
+
 runReal("real Codex MultiAgentV2 portable qualification", () => {
   if (!config) {
     test.skip("requires CCH_PORTABLE_QUALIFICATION=1 and explicit real-provider config", () => {});
@@ -712,6 +748,12 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
       async () => {
         const target = qualification[caseInfo.providerKind as "deepseek" | "glm"];
         const result = await executeLifecycle(qualification, invocation, caseInfo);
+        await assertNativeRootUsage(
+          qualification,
+          result.run,
+          caseInfo.caseId,
+          result.sentinels
+        );
         const audit =
           caseInfo.expected === "capability_error"
             ? validateUnsupportedWebsocket(caseInfo, target, result)

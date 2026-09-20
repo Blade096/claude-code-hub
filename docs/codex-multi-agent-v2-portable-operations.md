@@ -21,7 +21,7 @@ Portable 是协议兼容转换，不是解密。它只处理已经可读的 Code
 
 | 模式 | 行为 | 适用条件 |
 | --- | --- | --- |
-| `native` | 按 Codex 原生 Responses 结构逐字节/逐字段透传，不运行 portable codec | OpenAI 原生端点，或已经完整支持 Codex MultiAgentV2 协议的端点 |
+| `native` | 不运行 portable codec，保留 Codex collaboration wrapper 与 encrypted 语义；请求仍经过 CCH 既有通用处理 | OpenAI 原生端点，或已经完整支持 Codex MultiAgentV2 协议的端点 |
 | `portable` | 在总开关开启且请求被可靠识别后，转换协作结构并恢复响应 | 明确支持 Responses API，但不支持 Codex opaque wrapper 的第三方端点 |
 | `disabled` | 明确拒绝该 Provider 上的 MultiAgentV2 协作请求 | 未验收、数据策略不允许明文或已知不兼容的端点 |
 
@@ -121,8 +121,8 @@ Harness 不会把原始 Codex JSONL、stderr、tool arguments 或上游 body 写
 | `compatibility_provider_disabled` | Provider mode 为 `disabled` | 选择已验收 Provider；不要自动换 Provider |
 | `compatibility_client_or_protocol_mismatch` | 非受支持 Codex/MultiAgentV2 请求或协议形状不符 | 核对 Codex 版本、Responses endpoint 和客户端标识 |
 | `compatibility_opaque_content` | Portable 输入仍含 CCH 无法读取的 opaque content | 改用 `native` endpoint，或停止在该 Provider 上使用 portable |
-| `compatibility_name_collision` | 工具名与保留名称冲突，或恢复时名称无法唯一映射 | 检查调用级映射和工具声明；不要手工猜测/重写名称 |
-| `compatibility_restore_failed` | 上游返回无法按本次 request/turn metadata 恢复的响应 | 按 response id 检查 endpoint 协议实现；确认没有并发串线 |
+| `compatibility_name_collision` | 请求工具名与 portable 保留名称冲突 | 检查请求工具声明；不要手工猜测或重写保留名称 |
+| `compatibility_restore_failed` | 上游响应缺失映射、名称无法唯一恢复，或返回结构与本次 request/turn metadata 不一致 | 按 response id 检查 endpoint 协议实现；确认没有并发串线 |
 | `compatibility_transport_unsupported` | endpoint 不支持所需 WS/传输或握手失败 | 把该 endpoint 能力标为 unsupported；客户端改用明确支持的传输，禁止静默 fallback |
 
 取消、超时和普通上游 4xx/5xx 还应核对下一条 recovery 记录。如果 recovery 的 session/response id 或 actual Provider 与 fault 记录相同，应视为 metadata 生命周期缺陷，不可继续放量。

@@ -49,6 +49,15 @@ describe("Codex MultiAgentV2 portable operations documentation", () => {
     }
   });
 
+  test("keeps request collisions separate from response restoration failures", () => {
+    expect(operations).toContain(
+      "`compatibility_name_collision` | 请求工具名与 portable 保留名称冲突"
+    );
+    expect(operations).toContain(
+      "`compatibility_restore_failed` | 上游响应缺失映射、名称无法唯一恢复"
+    );
+  });
+
   test("never contains credential-shaped example values", () => {
     expect(operations).not.toMatch(/sk-[A-Za-z0-9_-]{8,}/);
     expect(operations).not.toMatch(/Bearer\s+[A-Za-z0-9._-]{8,}/);

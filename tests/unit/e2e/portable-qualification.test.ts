@@ -442,6 +442,41 @@ describe("portable qualification evidence safety", () => {
     });
   });
 
+  test("preserves a null actual transport for unsupported websocket evidence", () => {
+    const unsupportedCase: QualificationCase = {
+      ...sampleCase(),
+      caseId: "deepseek_lifecycle_none_websocket",
+      transport: "websocket",
+      expected: "capability_error",
+    };
+    const evidence = buildEvidence({
+      caseInfo: unsupportedCase,
+      config,
+      audit: audit({
+        state: "failed",
+        requestedTransport: "websocket",
+        actualTransport: null,
+        responseRestore: "not_started",
+        errorCategory: "compatibility_transport_unsupported",
+      }),
+      run: {
+        threadId: "thread-safe",
+        relatedThreadIds: [],
+        usage: null,
+        finalMessage: null,
+        failed: true,
+        collabTools: [],
+        collabAgentMessages: [],
+      },
+      result: "unsupported",
+    });
+
+    expect(evidence).toMatchObject({
+      transport: null,
+      stableErrorCode: "compatibility_transport_unsupported",
+    });
+  });
+
   test("writes exactly one allowlisted JSONL record", async () => {
     const directory = await mkdtemp(resolve(tmpdir(), "portable-evidence-test-"));
     const path = resolve(directory, "evidence.jsonl");

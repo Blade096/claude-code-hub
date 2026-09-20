@@ -18,7 +18,7 @@ export default defineConfig({
       reportsDirectory: path.resolve(root, "coverage/portable-qualification"),
       include: ["tests/e2e/_helpers/portable-qualification.ts"],
       exclude: ["node_modules/", "**/*.d.ts"],
-      thresholds: { lines: 75, functions: 75, branches: 70, statements: 75 },
+      thresholds: { lines: 80, functions: 80, branches: 80, statements: 80 },
     },
     reporters: ["verbose"],
     isolate: true,

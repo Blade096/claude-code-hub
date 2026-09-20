@@ -81,7 +81,7 @@ export type QualificationEvidence = {
   actualProviderName: string | null;
   requestedModel: string | null;
   actualModel: string | null;
-  transport: "http" | "sse" | "websocket";
+  transport: "http" | "sse" | "websocket" | null;
   operation: QualificationCase["operation"];
   historyMode: QualificationHistoryMode;
   result: QualificationResult;
@@ -439,7 +439,7 @@ export function buildEvidence(input: {
     actualProviderName: audit?.actualProviderName ?? input.actual?.providerName ?? null,
     requestedModel: audit?.requestedModel ?? configuredProvider.model,
     actualModel: audit?.actualModel ?? input.actual?.model ?? null,
-    transport: audit?.actualTransport ?? input.actual?.transport ?? caseInfo.transport,
+    transport: audit ? audit.actualTransport : (input.actual?.transport ?? caseInfo.transport),
     operation: caseInfo.operation,
     historyMode: caseInfo.historyMode,
     result,

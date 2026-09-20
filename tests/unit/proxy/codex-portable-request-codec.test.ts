@@ -115,8 +115,29 @@ describe("Codex MultiAgentV2 portable request codec", () => {
       request,
     });
     if (mode === "native") {
-      expect(result).toEqual({ request, metadata: null });
-      expect(result.request).toBe(request);
+      expect(result.request).not.toBe(request);
+      const nativeTools =
+        location === "tools"
+          ? (result.request.tools as Array<Record<string, unknown>>)
+          : ((result.request.input as Array<Record<string, unknown>>)[0].tools as Array<
+              Record<string, unknown>
+            >);
+      expect(nativeTools[0].name).toBe("collaboration-optimize");
+      const nativeTool = (nativeTools[0].tools as Array<Record<string, unknown>>)[0];
+      const nativeMessage = (
+        (nativeTool.parameters as Record<string, unknown>).properties as Record<string, unknown>
+      ).message;
+      expect(nativeMessage).not.toHaveProperty("encrypted");
+      expect(result.metadata).toMatchObject({
+        toolMappings: [
+          {
+            encodedNamespace: "collaboration-optimize",
+            originalNamespace: "collaboration",
+            originalName: action,
+          },
+        ],
+        transformations: [`${action}_message_schema`, "collaboration_namespace"],
+      });
       expect(request).toEqual(before);
       return;
     }
@@ -209,6 +230,42 @@ describe("Codex MultiAgentV2 portable request codec", () => {
       ],
     });
     expect(JSON.stringify(result.metadata)).not.toContain("Implement the bounded worker task");
+  });
+
+  test("prepares a real Codex subagent turn without collaboration tools", async () => {
+    const request = makeRequest({
+      client_metadata: {
+        "x-openai-subagent": "worker",
+        "x-codex-parent-thread-id": "parent-thread",
+      },
+      tools: [{ type: "function", name: "exec_command", parameters: { type: "object" } }],
+    });
+    const before = structuredClone(request);
+
+    const result = await preparePortableCompatibilityRequest({
+      session: makeSession(request),
+      provider: makeProvider(),
+      request,
+    });
+
+    expect(request).toEqual(before);
+    expect(result.request).not.toBe(request);
+    expect(result.request).toMatchObject({
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_text", text: "Message Type: NEW_TASK\nPayload:\n" },
+            { type: "input_text", text: "Implement the bounded worker task." },
+          ],
+        },
+      ],
+    });
+    expect(result.metadata).toMatchObject({
+      toolMappings: [],
+      transformations: ["agent_message_input"],
+    });
   });
 
   test("handles additional_tools and remains idempotent after copy-on-write cloning", async () => {
@@ -381,11 +438,11 @@ describe("Codex MultiAgentV2 portable request codec", () => {
     ]);
   });
 
-  test("preserves non-allowlisted collaboration fields and ordinary tools", async () => {
+  test("maps every collaboration tool while only rewriting encrypted message schemas", async () => {
     const namespace = spawnAgentNamespace();
     const unsupportedCollaborationTool = {
       type: "function",
-      name: "wait",
+      name: "wait_agent",
       description: "Wait for agents",
       parameters: {
         type: "object",
@@ -412,9 +469,48 @@ describe("Codex MultiAgentV2 portable request codec", () => {
 
     expect(rewrittenNamespaceTools[1]).toEqual(unsupportedCollaborationTool);
     expect(rewrittenTools[1]).toEqual(businessTool);
+    expect(result.metadata?.toolMappings.map((mapping) => mapping.originalName)).toEqual([
+      "spawn_agent",
+      "wait_agent",
+    ]);
+    expect(result.metadata?.transformations).toEqual([
+      "spawn_agent_message_schema",
+      "collaboration_namespace",
+    ]);
   });
 
-  test("keeps native mode byte-for-byte unchanged", async () => {
+  test("rejects an ordinary tool that collides with any renamed collaboration tool", async () => {
+    const namespace = spawnAgentNamespace();
+    namespace.tools.push({
+      type: "function",
+      name: "wait_agent",
+      parameters: { type: "object", properties: {} },
+    });
+    const request = makeRequest({
+      tools: [
+        namespace,
+        {
+          type: "function",
+          name: "wait_agent",
+          parameters: { type: "object", properties: {} },
+        },
+      ],
+      input: [],
+    });
+
+    await expect(
+      preparePortableCompatibilityRequest({
+        session: makeSession(request),
+        provider: makeProvider(),
+        request,
+      })
+    ).rejects.toMatchObject({ compatibilityCode: "name_collision" });
+  });
+
+  test("keeps native mode byte-for-byte unchanged while the global switch is off", async () => {
+    mocks.getCachedSystemSettings.mockResolvedValueOnce({
+      enableCodexMultiAgentV2Compatibility: false,
+    });
     const request = makeRequest();
     const before = JSON.stringify(request);
     const result = await preparePortableCompatibilityRequest({
@@ -426,7 +522,7 @@ describe("Codex MultiAgentV2 portable request codec", () => {
     expect(result.request).toBe(request);
     expect(JSON.stringify(result.request)).toBe(before);
     expect(result.metadata).toBeNull();
-    expect(mocks.getCachedSystemSettings).not.toHaveBeenCalled();
+    expect(mocks.getCachedSystemSettings).toHaveBeenCalledOnce();
   });
 
   test("rechecks disabled mode and the global switch for the actual attempt", async () => {

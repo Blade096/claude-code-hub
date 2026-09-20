@@ -104,6 +104,11 @@ export function markPortableResponseSucceeded(metadata: PortableTransformationMe
   metadata.audit.errorCategory = null;
 }
 
+export function markPortableUpstreamResponseFailed(metadata: PortableTransformationMetadata): void {
+  metadata.audit.state = "failed";
+  metadata.audit.errorCategory = null;
+}
+
 export function markPortableResponseFailed(
   metadata: PortableTransformationMetadata,
   error: PortableCompatibilityError
@@ -159,8 +164,7 @@ export function recordPortableFailureAudit(
   audit.sessionId = session.sessionId;
   if (actualProviderId !== null) {
     audit.actualProviderId = actualProviderId;
-    audit.actualProviderName =
-      actualProviderId === provider?.id ? (provider.name ?? null) : null;
+    audit.actualProviderName = actualProviderId === provider?.id ? (provider.name ?? null) : null;
     audit.actualModel = currentModel(session);
   }
   if (error.category === "compatibility_transport_unsupported") {

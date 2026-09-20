@@ -3110,20 +3110,29 @@ export class ProxyForwarder {
 
       (init as Record<string, unknown>).verbose = true;
 
-      // OpenAI Responses WebSocket 上游尝试（仅 Codex 供应商 + 开关开启 + 客户端以 WS 接入）
-      // 若握手失败或首帧前关闭，降级到下面的 HTTP 路径；不计入熔断器。
+      // OpenAI/native Responses WebSocket 上游尝试。Portable 第三方 Provider
+      // 只支持 HTTP/SSE，在探测或建连前直接拒绝；native 握手失败时保留既有
+      // HTTP 回退行为，且不计入熔断器。
       let responsesWsResponse: Response | null = null;
       const responsesWsEndpointId = endpointAudit?.endpointId ?? null;
-      const portableWebsocketRequired = Boolean(
-        isWebsocketClientRequest(session.headers) && session.getPortableTransformationMetadata?.()
+      const portableWebsocketRequest = Boolean(
+        isWebsocketClientRequest(session.headers) &&
+          provider.codexMultiAgentV2Mode === "portable" &&
+          session.getPortableTransformationMetadata?.()
       );
+      if (portableWebsocketRequest) {
+        throw new PortableCompatibilityError("provider_transport_unsupported", {
+          fieldPath: "responses.websocket.portable",
+          providerId: provider.id,
+        });
+      }
       try {
         const wsEligibility = await evaluateResponsesWsEligibility({
           headers: session.headers,
           provider,
           endpointId: responsesWsEndpointId,
         });
-        if ((canUseTransportFallback || portableWebsocketRequired) && wsEligibility.eligible) {
+        if (canUseTransportFallback && wsEligibility.eligible) {
           // Use the *final* outgoing body so the WS frame matches the HTTP
           // path: it has been through filterPrivateParameters() and any
           // request-filter transformations. Falling back to
@@ -3183,18 +3192,7 @@ export class ProxyForwarder {
                 errorMessage: wsResult.message,
                 attemptNumber: undefined,
               });
-              if (portableWebsocketRequired) {
-                throw new PortableCompatibilityError("provider_transport_unsupported", {
-                  fieldPath: "responses.websocket",
-                  providerId: provider.id,
-                });
-              }
             }
-          } else if (portableWebsocketRequired) {
-            throw new PortableCompatibilityError("provider_transport_unsupported", {
-              fieldPath: "responses.websocket.body",
-              providerId: provider.id,
-            });
           }
         } else if (wsEligibility.isWebsocketClient && wsEligibility.downgradeReason) {
           session.addProviderToChain(provider, {
@@ -3204,22 +3202,10 @@ export class ProxyForwarder {
             errorMessage: wsEligibility.downgradeReason,
             attemptNumber: undefined,
           });
-          if (portableWebsocketRequired) {
-            throw new PortableCompatibilityError("provider_transport_unsupported", {
-              fieldPath: "responses.websocket.eligibility",
-              providerId: provider.id,
-            });
-          }
         }
       } catch (wsError) {
         if (isPortableCompatibilityError(wsError)) {
           throw wsError;
-        }
-        if (portableWebsocketRequired) {
-          throw new PortableCompatibilityError("provider_transport_unsupported", {
-            fieldPath: "responses.websocket",
-            providerId: provider.id,
-          });
         }
         logger.warn(
           "ProxyForwarder: Upstream Responses WebSocket attempt threw, falling back to HTTP",

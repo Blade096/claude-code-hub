@@ -53,7 +53,6 @@ export function resolveCodexInvocation(codexBin: string): CodexInvocation {
 export async function writeCodexHome(
   qualification: PortableQualificationConfig,
   target: QualificationProvider,
-  transport: "sse" | "websocket",
   options: { targetModel?: string; targetIdleTimeoutMs?: number } = {}
 ): Promise<{ home: string; schemaPath: string; workdir: string }> {
   const home = await mkdtemp(join(tmpdir(), "cch-portable-qualification-"));
@@ -62,14 +61,13 @@ export async function writeCodexHome(
   const workdir = join(home, "workspace");
   await Promise.all([mkdir(agentsDir, { recursive: true }), mkdir(workdir, { recursive: true })]);
 
-  const supportsWebsockets = transport === "websocket";
   const providerToml = (name: string, idleTimeout?: number) => [
     `[model_providers.${name}]`,
     `name = ${tomlString(name)}`,
     `base_url = ${tomlString(`${qualification.baseUrl}/v1`)}`,
     'env_key = "CCH_PORTABLE_QUALIFICATION_PROXY_KEY"',
     'wire_api = "responses"',
-    `supports_websockets = ${supportsWebsockets}`,
+    "supports_websockets = false",
     "request_max_retries = 0",
     "stream_max_retries = 0",
     ...(idleTimeout ? [`stream_idle_timeout_ms = ${idleTimeout}`] : []),
@@ -83,6 +81,7 @@ export async function writeCodexHome(
     "",
     "[features]",
     "multi_agent_v2 = true",
+    "plugins = false",
     "",
     "[agents]",
     "enabled = true",
@@ -157,7 +156,7 @@ export async function runCodexProcess(
 ): Promise<CodexProcessResult> {
   const child = spawn(invocation.command, [...invocation.prefix, ...args], {
     cwd: home,
-    env: { ...process.env, CODEX_HOME: home, NO_COLOR: "1" },
+    env: { ...process.env, CODEX_HOME: home, CODEX_SQLITE_HOME: home, NO_COLOR: "1" },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
@@ -177,7 +176,7 @@ export async function runCodexProcess(
     if (
       cancelAfterMs &&
       !cancelTimer &&
-      /"type":"collab_tool_call".*"tool":"spawn_agent"/.test(stdout)
+      /"type":"collab_tool_call".*"tool":"(?:spawn_agent|wait)"/.test(stdout)
     ) {
       cancelTimer = setTimeout(() => {
         cancelled = true;

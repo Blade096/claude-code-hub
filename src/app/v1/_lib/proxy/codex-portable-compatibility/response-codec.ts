@@ -4,6 +4,7 @@ import {
   markPortableResponseFailed,
   markPortableResponseStarted,
   markPortableResponseSucceeded,
+  markPortableUpstreamResponseFailed,
   portableAuditCorrelation,
 } from "./audit";
 import { PortableCompatibilityError } from "./errors";
@@ -47,7 +48,7 @@ function validateMappings(metadata: PortableTransformationMetadata): void {
       typeof mapping.originalNamespace !== "string" ||
       mapping.originalNamespace.length === 0 ||
       typeof mapping.originalName !== "string" ||
-      !isCollaborationAction(mapping.originalName)
+      mapping.originalName.length === 0
     ) {
       throw new PortableCompatibilityError("malformed_response", {
         fieldPath: `metadata.toolMappings.${index}`,
@@ -72,23 +73,19 @@ function resolveMapping(
   omittedNamespace: boolean,
   encodedNamespace?: string
 ): PortableToolIdentityMapping {
-  if (!isCollaborationAction(name)) {
-    throw new PortableCompatibilityError("unknown_tool", {
-      fieldPath,
-      providerId: metadata.providerId,
-    });
-  }
-
   const matches = metadata.toolMappings.filter(
     (mapping) =>
       mapping.originalName === name &&
       (omittedNamespace || mapping.encodedNamespace === encodedNamespace)
   );
   if (matches.length === 0) {
-    throw new PortableCompatibilityError("missing_mapping", {
-      fieldPath,
-      providerId: metadata.providerId,
-    });
+    throw new PortableCompatibilityError(
+      isCollaborationAction(name) ? "missing_mapping" : "unknown_tool",
+      {
+        fieldPath,
+        providerId: metadata.providerId,
+      }
+    );
   }
   if (matches.length > 1) {
     const uniqueIdentities = new Set(matches.map(mappingKey));
@@ -132,7 +129,12 @@ function restoreFunctionCall(
   const namespace = typeof item.namespace === "string" ? item.namespace : null;
   const name = item.name;
 
-  if (namespace === ORIGINAL_COLLABORATION_NAMESPACE && isCollaborationAction(name)) {
+  if (
+    namespace === ORIGINAL_COLLABORATION_NAMESPACE &&
+    metadata.toolMappings.some(
+      (mapping) => mapping.originalNamespace === namespace && mapping.originalName === name
+    )
+  ) {
     if (
       !metadata.toolMappings.some(
         (mapping) => mapping.originalNamespace === namespace && mapping.originalName === name
@@ -147,7 +149,13 @@ function restoreFunctionCall(
   }
   if (namespace === null && name.startsWith(`${ORIGINAL_COLLABORATION_NAMESPACE}__`)) {
     const originalName = name.slice(ORIGINAL_COLLABORATION_NAMESPACE.length + 2);
-    if (isCollaborationAction(originalName)) {
+    if (
+      metadata.toolMappings.some(
+        (mapping) =>
+          mapping.originalNamespace === ORIGINAL_COLLABORATION_NAMESPACE &&
+          mapping.originalName === originalName
+      )
+    ) {
       if (
         !metadata.toolMappings.some(
           (mapping) =>
@@ -178,13 +186,17 @@ function restoreFunctionCall(
   } else if (namespace === null && name.startsWith(`${PORTABLE_COLLABORATION_NAMESPACE}__`)) {
     style = "double";
     actionName = name.slice(PORTABLE_COLLABORATION_NAMESPACE.length + 2);
-  } else if (namespace === null && isCollaborationAction(name)) {
+  } else if (
+    namespace === null &&
+    (isCollaborationAction(name) ||
+      metadata.toolMappings.some((mapping) => mapping.originalName === name))
+  ) {
     style = "omitted";
     actionName = name;
   }
 
   if (style === null) {
-    return { identity: canonicalIdentity(namespace, name), restored: false };
+    return null;
   }
   if (!actionName) {
     throw new PortableCompatibilityError("malformed_response", {
@@ -271,6 +283,7 @@ function requireKnownCallIdentity(
     });
   }
   const bindings = keys.map((key) => state.callIdentities.get(key));
+  if (bindings.every((binding) => binding === undefined)) return;
   if (bindings.some((binding) => binding === undefined) || new Set(bindings).size !== 1) {
     throw new PortableCompatibilityError("response_identity_mismatch", {
       fieldPath,
@@ -352,6 +365,10 @@ export function restorePortableCompatibilityEventPayload(
   validateMappings(metadata);
   capturePortableResponseId(metadata, payload);
 
+  if (metadata.toolMappings.length === 0) {
+    return { payload: structuredClone(payload), restoredCount: 0 };
+  }
+
   const restoredPayload = structuredClone(payload);
   const eventType = restoredPayload.type;
 
@@ -422,6 +439,10 @@ export function restorePortableCompatibilityPayload(
   validateMappings(metadata);
   capturePortableResponseId(metadata, payload);
 
+  if (metadata.toolMappings.length === 0) {
+    return { payload: structuredClone(payload), restoredCount: 0 };
+  }
+
   const restoredPayload = structuredClone(payload);
   let restoredCount = 0;
   let foundOutput = false;
@@ -457,28 +478,58 @@ export async function restorePortableCompatibilityResponse(
     const state = createPortableResponseRestoreState();
     let restoredCount = 0;
     let failed = false;
+    let terminal: "completed" | "failed" | null = null;
+    const failRestore = (error: unknown) => {
+      if (failed) return;
+      failed = true;
+      const compatibilityError =
+        error instanceof PortableCompatibilityError
+          ? error
+          : new PortableCompatibilityError("malformed_response", {
+              providerId: metadata.providerId,
+            });
+      metadata.responseRestore = "failed";
+      markPortableResponseFailed(metadata, compatibilityError);
+    };
     return transformPortableSseResponse(response, {
       transformJson(payload) {
         const restored = restorePortableCompatibilityEventPayload(payload, metadata, state);
         restoredCount += restored.restoredCount;
+        if (isRecord(payload)) {
+          if (payload.type === "response.completed") terminal = "completed";
+          if (payload.type === "response.failed" || payload.type === "response.incomplete") {
+            terminal = "failed";
+          }
+        }
         return { payload: restored.payload, changed: restored.restoredCount > 0 };
       },
       onFailure(error) {
-        failed = true;
-        const compatibilityError =
-          error instanceof PortableCompatibilityError
-            ? error
-            : new PortableCompatibilityError("malformed_response", {
-                providerId: metadata.providerId,
-              });
-        metadata.responseRestore = "failed";
-        markPortableResponseFailed(metadata, compatibilityError);
+        failRestore(error);
+      },
+      validateEnd() {
+        if (terminal === null) {
+          throw new PortableCompatibilityError("malformed_response", {
+            fieldPath: "event.terminal",
+            providerId: metadata.providerId,
+          });
+        }
+      },
+      onCancel() {
+        if (terminal === null) {
+          failRestore(
+            new PortableCompatibilityError("malformed_response", {
+              fieldPath: "response.cancelled",
+              providerId: metadata.providerId,
+            })
+          );
+        }
       },
       onFinalize() {
         if (!failed) {
           metadata.responseRestore = restoredCount > 0 ? "restored" : "not_needed";
           metadata.audit.responseRestore = metadata.responseRestore;
-          markPortableResponseSucceeded(metadata);
+          if (terminal === "completed") markPortableResponseSucceeded(metadata);
+          else markPortableUpstreamResponseFailed(metadata);
         }
         lifecycle.onFinalize?.();
       },

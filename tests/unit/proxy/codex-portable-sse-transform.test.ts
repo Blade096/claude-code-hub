@@ -349,6 +349,53 @@ describe("Codex portable SSE response transform", () => {
     }
   });
 
+  test("fails closed when a framed SSE stream ends without a terminal response event", async () => {
+    const state = metadata();
+    const body = `data: ${JSON.stringify({
+      type: "response.output_item.added",
+      output_index: 0,
+      item: {
+        id: "item_1",
+        type: "function_call",
+        call_id: "call_1",
+        name: "collaboration-optimize.spawn_agent",
+        arguments: "{}",
+      },
+    })}\n\n`;
+    const response = await restorePortableCompatibilityResponse(
+      chunkedResponse(body, [body.length]),
+      state
+    );
+    const text = await response.text();
+
+    expect(text).toContain("compatibility_restore_failed");
+    expect(state.responseRestore).toBe("failed");
+    expect(state.audit.state).toBe("failed");
+  });
+
+  test.each(["response.failed", "response.incomplete"])(
+    "keeps the upstream %s terminal event but never audits it as success",
+    async (type) => {
+      const state = metadata([]);
+      const body = `data: ${JSON.stringify({ type, response: { id: "resp_failed" } })}\n\ndata: [DONE]\n\n`;
+      const response = await restorePortableCompatibilityResponse(
+        chunkedResponse(body, [body.length]),
+        state
+      );
+      const text = await response.text();
+
+      expect(text).toContain(type);
+      expect(text).not.toContain("compatibility_restore_failed");
+      expect(state.responseRestore).toBe("not_needed");
+      expect(state.audit).toMatchObject({
+        state: "failed",
+        responseRestore: "not_needed",
+        errorCategory: null,
+        responseId: "resp_failed",
+      });
+    }
+  );
+
   test("cleans request lifecycle metadata when the client cancels", async () => {
     let upstreamCancelled = false;
     const upstream = new Response(
@@ -367,7 +414,8 @@ describe("Codex portable SSE response transform", () => {
       { headers: { "content-type": "text/event-stream" } }
     );
     const finalize = vi.fn();
-    const response = await restorePortableCompatibilityResponse(upstream, metadata(), {
+    const state = metadata();
+    const response = await restorePortableCompatibilityResponse(upstream, state, {
       onFinalize: finalize,
     });
     const reader = response.body!.getReader();
@@ -375,6 +423,8 @@ describe("Codex portable SSE response transform", () => {
     await reader.cancel("client_cancelled");
 
     expect(upstreamCancelled).toBe(true);
+    expect(state.responseRestore).toBe("failed");
+    expect(state.audit.state).toBe("failed");
     expect(finalize).toHaveBeenCalledOnce();
   });
 

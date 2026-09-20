@@ -448,124 +448,6 @@ describe("portable compatibility proxy seams", () => {
     }
   );
 
-  test("routes portable WebSocket frames through the shared response restore chain", async () => {
-    const provider = makeProvider();
-    const session = makeSession(provider, { stream: true });
-    mocks.isWebsocketClientRequest.mockReturnValue(true);
-    mocks.evaluateResponsesWsEligibility.mockResolvedValue({
-      isWebsocketClient: true,
-      eligible: true,
-    });
-    let upstreamBody: Record<string, unknown> | null = null;
-    mocks.tryResponsesWebsocketUpstream.mockImplementationOnce(async (options) => {
-      upstreamBody = options.body;
-      const events = [
-        {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: {
-            id: "ws_item",
-            type: "function_call",
-            call_id: "ws_call",
-            namespace: "collaboration-optimize",
-            name: "spawn_agent",
-            arguments: "",
-          },
-        },
-        {
-          type: "response.function_call_arguments.delta",
-          item_id: "ws_item",
-          output_index: 0,
-          delta: '{"message":"child task"}',
-        },
-        {
-          type: "response.output_item.done",
-          output_index: 0,
-          item: {
-            id: "ws_item",
-            type: "function_call",
-            call_id: "ws_call",
-            namespace: "collaboration-optimize",
-            name: "spawn_agent",
-            arguments: '{"message":"child task"}',
-          },
-        },
-        {
-          type: "response.completed",
-          response: {
-            output: [
-              {
-                id: "ws_item",
-                type: "function_call",
-                call_id: "ws_call",
-                namespace: "collaboration-optimize",
-                name: "spawn_agent",
-                arguments: '{"message":"child task"}',
-              },
-            ],
-          },
-        },
-      ];
-      return {
-        response: new Response(
-          events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
-          {
-            status: 200,
-            headers: {
-              "content-type": "text/event-stream",
-              "x-cch-upstream-transport": "websocket",
-            },
-          }
-        ),
-        connected: true,
-        reused: false,
-      };
-    });
-    const fetch = vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode");
-    const { doForward } = ProxyForwarder as unknown as {
-      doForward: (session: ProxySession, provider: Provider, baseUrl: string) => Promise<Response>;
-    };
-
-    const upstreamResponse = await doForward(session, provider, provider.url);
-    vi.spyOn(ProxyResponseHandler as never, "handleStream").mockImplementationOnce(
-      async (_session: ProxySession, response: Response) => response
-    );
-    const clientResponse = await ProxyResponseHandler.dispatch(session, upstreamResponse);
-    const responseText = await clientResponse.text();
-
-    expect(upstreamBody).toMatchObject({
-      stream: true,
-      tools: [{ name: "collaboration-optimize" }],
-      input: [
-        {
-          type: "message",
-          content: [
-            { type: "input_text", text: "Payload:\n" },
-            { type: "input_text", text: "Complete the seam test task." },
-          ],
-        },
-      ],
-    });
-    expect(fetch).not.toHaveBeenCalled();
-    expect(responseText).toContain('"namespace":"collaboration","name":"spawn_agent"');
-    expect(responseText).toContain('"type":"response.function_call_arguments.delta"');
-    expect(session.getPortableTransformationMetadata()).toBeNull();
-    expect(session.getSpecialSettings()).toContainEqual(
-      expect.objectContaining({
-        type: "codex_multi_agent_v2_portable",
-        actualProviderId: provider.id,
-        responseRestore: "restored",
-      })
-    );
-    expect(JSON.stringify(session.getSpecialSettings())).not.toContain(
-      "Complete the seam test task"
-    );
-    const loggedArguments = Object.values(mocks.logger).flatMap(
-      (loggerMethod) => loggerMethod.mock.calls
-    );
-    expect(JSON.stringify(loggedArguments)).not.toContain("Complete the seam test task");
-  });
-
   test("transforms an expanded compaction replay exactly once before the portable attempt", async () => {
     const provider = makeProvider();
     const token = encodeCompactionSummary({
@@ -627,7 +509,7 @@ describe("portable compatibility proxy seams", () => {
     expect(session.getSpecialSettings()).toHaveLength(1);
   });
 
-  test("keeps native collaboration wrappers unchanged after compaction replay expansion", async () => {
+  test("prepares native root collaboration tools after compaction replay expansion", async () => {
     const provider = { ...makeProvider(), codexMultiAgentV2Mode: "native" as const } as Provider;
     const token = encodeCompactionSummary({
       summary: "Native checkpoint summary.",
@@ -639,6 +521,7 @@ describe("portable compatibility proxy seams", () => {
     const session = makeSession(provider, {
       input: [...replay.items, originalAgentMessage],
     });
+    const originalRequest = structuredClone(session.request.message);
     let upstreamBody: Record<string, unknown> | null = null;
     vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode").mockImplementationOnce(
       async (_url: string, init: RequestInit) => {
@@ -658,9 +541,9 @@ describe("portable compatibility proxy seams", () => {
     expect(upstreamBody).toMatchObject({
       tools: [
         {
-          name: "collaboration",
+          name: "collaboration-optimize",
           tools: [
-            { name: "spawn_agent", parameters: { properties: { message: { encrypted: true } } } },
+            { name: "spawn_agent", parameters: { properties: { message: { type: "string" } } } },
           ],
         },
       ],
@@ -681,8 +564,12 @@ describe("portable compatibility proxy seams", () => {
         },
       ],
     });
-    expect(session.getPortableTransformationMetadata()).toBeNull();
-    expect(session.getSpecialSettings()).toBeNull();
+    expect(session.request.message).toEqual(originalRequest);
+    expect(session.getPortableTransformationMetadata()?.transformations).toEqual([
+      "spawn_agent_message_schema",
+      "collaboration_namespace",
+    ]);
+    expect(session.getSpecialSettings()).toHaveLength(1);
   });
 
   test("keeps a native SSE request and every response frame unchanged", async () => {
@@ -702,6 +589,22 @@ describe("portable compatibility proxy seams", () => {
           namespace: "collaboration",
           name: "spawn_agent",
           arguments: "{}",
+        },
+      })}\r\n\r\n`,
+      `data: ${JSON.stringify({
+        type: "response.completed",
+        response: {
+          id: "native_response",
+          output: [
+            {
+              id: "native_item",
+              type: "function_call",
+              call_id: "native_call",
+              namespace: "collaboration",
+              name: "spawn_agent",
+              arguments: "{}",
+            },
+          ],
         },
       })}\r\n\r\n`,
       "data: [DONE]\n\n",
@@ -746,118 +649,74 @@ describe("portable compatibility proxy seams", () => {
     expect(session.getPortableTransformationMetadata()).toBeNull();
   });
 
-  test("portable websocket capability failures neither fall back to HTTP nor switch Provider", async () => {
+  test("rejects portable WebSocket before eligibility, upstream WS, or HTTP dispatch", async () => {
     const provider = makeProvider();
     const session = makeSession(provider);
     mocks.isWebsocketClientRequest.mockReturnValue(true);
-    mocks.evaluateResponsesWsEligibility.mockResolvedValueOnce({
-      isWebsocketClient: true,
-      eligible: true,
-    });
-    mocks.tryResponsesWebsocketUpstream.mockResolvedValueOnce({
-      failed: true,
-      reason: "ws_upgrade_rejected",
-      message: "HTTP 426 Upgrade Required",
-      cacheableAsUnsupported: true,
-    });
     const fetch = vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode");
     const selectAlternative = vi.spyOn(ProxyForwarder as never, "selectAlternative");
+    const { doForward } = ProxyForwarder as unknown as {
+      doForward: (session: ProxySession, provider: Provider, baseUrl: string) => Promise<Response>;
+    };
 
-    await expect(ProxyForwarder.send(session)).rejects.toMatchObject({
+    await expect(doForward(session, provider, provider.url)).rejects.toMatchObject({
       compatibilityCode: "provider_transport_unsupported",
-      fieldPath: "responses.websocket",
+      fieldPath: "responses.websocket.portable",
       providerId: provider.id,
     });
 
-    expect(mocks.tryResponsesWebsocketUpstream).toHaveBeenCalledOnce();
+    expect(mocks.evaluateResponsesWsEligibility).not.toHaveBeenCalled();
+    expect(mocks.tryResponsesWebsocketUpstream).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
     expect(selectAlternative).not.toHaveBeenCalled();
-    expect(session.getPortableTransformationMetadata()).toBeNull();
   });
 
-  test("portable websocket ineligibility fails closed before an upstream attempt", async () => {
-    const provider = makeProvider();
-    const session = makeSession(provider);
-    mocks.isWebsocketClientRequest.mockReturnValue(true);
-    mocks.evaluateResponsesWsEligibility.mockResolvedValueOnce({
-      isWebsocketClient: true,
-      eligible: false,
-      downgradeReason: "endpoint_ws_unsupported_cached",
-      endpointId: 7,
-    });
-    const fetch = vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode");
-
-    const { doForward } = ProxyForwarder as unknown as {
-      doForward: (session: ProxySession, provider: Provider, baseUrl: string) => Promise<Response>;
-    };
-
-    await expect(doForward(session, provider, provider.url)).rejects.toMatchObject({
-      compatibilityCode: "provider_transport_unsupported",
-      fieldPath: "responses.websocket.eligibility",
-    });
-    expect(mocks.tryResponsesWebsocketUpstream).not.toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
-  });
-
-  test("portable websocket eligibility exceptions fail closed", async () => {
-    const provider = makeProvider();
-    const session = makeSession(provider);
-    mocks.isWebsocketClientRequest.mockReturnValue(true);
-    mocks.evaluateResponsesWsEligibility.mockRejectedValueOnce(
-      new Error("websocket eligibility lookup failed")
-    );
-    const fetch = vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode");
-    const { doForward } = ProxyForwarder as unknown as {
-      doForward: (session: ProxySession, provider: Provider, baseUrl: string) => Promise<Response>;
-    };
-
-    await expect(doForward(session, provider, provider.url)).rejects.toMatchObject({
-      compatibilityCode: "provider_transport_unsupported",
-      fieldPath: "responses.websocket",
-    });
-    expect(mocks.tryResponsesWebsocketUpstream).not.toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
-  });
-
-  test("portable websocket adapter exceptions fail closed while native requests retain HTTP fallback", async () => {
+  test("keeps native OpenAI WebSocket eligible with its existing HTTP fallback", async () => {
     mocks.isWebsocketClientRequest.mockReturnValue(true);
     mocks.evaluateResponsesWsEligibility.mockResolvedValue({
       isWebsocketClient: true,
       eligible: true,
     });
-    mocks.tryResponsesWebsocketUpstream.mockRejectedValueOnce(
+    mocks.tryResponsesWebsocketUpstream.mockRejectedValue(
       new Error("upstream websocket handshake failed")
     );
     const fetch = vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode");
-    const portableProvider = makeProvider();
-    const portableSession = makeSession(portableProvider);
+    fetch.mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ output: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+    );
     const { doForward } = ProxyForwarder as unknown as {
       doForward: (session: ProxySession, provider: Provider, baseUrl: string) => Promise<Response>;
     };
 
-    await expect(
-      doForward(portableSession, portableProvider, portableProvider.url)
-    ).rejects.toMatchObject({
-      compatibilityCode: "provider_transport_unsupported",
-    });
-    expect(fetch).not.toHaveBeenCalled();
-
     const nativeProvider = { ...makeProvider(), codexMultiAgentV2Mode: "native" } as Provider;
-    const nativeSession = makeSession(nativeProvider);
-    mocks.tryResponsesWebsocketUpstream.mockRejectedValueOnce(
-      new Error("upstream websocket handshake failed")
+    const preparedNativeSession = makeSession(nativeProvider);
+    const preparedResponse = await doForward(
+      preparedNativeSession,
+      nativeProvider,
+      nativeProvider.url
     );
-    fetch.mockResolvedValueOnce(
-      new Response(JSON.stringify({ output: [] }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      })
-    );
+    expect(preparedResponse.status).toBe(200);
+    expect(preparedNativeSession.getPortableTransformationMetadata()).not.toBeNull();
 
-    const nativeResponse = await doForward(nativeSession, nativeProvider, nativeProvider.url);
+    mocks.getCachedSystemSettings.mockResolvedValue({
+      enableCodexMultiAgentV2Compatibility: false,
+      enableClaudeMetadataUserIdInjection: false,
+      enableBillingHeaderRectifier: false,
+    });
+    const unchangedNativeSession = makeSession(nativeProvider);
+    const nativeResponse = await doForward(
+      unchangedNativeSession,
+      nativeProvider,
+      nativeProvider.url
+    );
 
     expect(nativeResponse.status).toBe(200);
-    expect(fetch).toHaveBeenCalledOnce();
-    expect(nativeSession.getPortableTransformationMetadata()).toBeNull();
+    expect(mocks.tryResponsesWebsocketUpstream).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(unchangedNativeSession.getPortableTransformationMetadata()).toBeNull();
   });
 });

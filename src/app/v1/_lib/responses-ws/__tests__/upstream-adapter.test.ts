@@ -1,4 +1,5 @@
 import type { AddressInfo } from "node:net";
+import { createServer as createTcpServer, type Socket } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import type { Provider } from "@/types/provider";
@@ -831,6 +832,49 @@ describe("tryResponsesWebsocketUpstream", () => {
     expect(result.message).toContain("aborted before first upstream WebSocket event");
     expect(result.cacheableAsUnsupported).toBe(false);
     expect(upstreamCloseCode).toBe(1000);
+  });
+
+  it("does not emit an unhandled error when aborted during the WS handshake", async () => {
+    const sockets = new Set<Socket>();
+    let resolveConnected!: () => void;
+    const connected = new Promise<void>((resolve) => {
+      resolveConnected = resolve;
+    });
+    const tcpServer = createTcpServer((socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+      resolveConnected();
+    });
+    await new Promise<void>((resolve) => tcpServer.listen(0, "127.0.0.1", resolve));
+    const address = tcpServer.address() as AddressInfo;
+    const abortController = new AbortController();
+
+    try {
+      const resultPromise = tryResponsesWebsocketUpstream({
+        provider: codexProvider(),
+        upstreamUrl: `http://127.0.0.1:${address.port}/v1/responses`,
+        upstreamHeaders: new Headers({ authorization: "Bearer sk-mock" }),
+        sessionId: "client-ws-session-aborted-during-handshake",
+        abortSignal: abortController.signal,
+        body: { model: "gpt-5.5", input: "hi" },
+      });
+
+      await withTimeout(connected, 1_000, "upstream TCP handshake did not start");
+      abortController.abort();
+      const result = await withTimeout(
+        resultPromise,
+        1_000,
+        "upstream WS attempt hung after abort during handshake"
+      );
+
+      expect("failed" in result).toBe(true);
+      if (!("failed" in result)) return;
+      expect(result.reason).toBe("ws_error_pre_first_event");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => tcpServer.close(() => resolve()));
+    }
   });
 
   it("keeps the persistent session map bounded when every retained session is active", async () => {

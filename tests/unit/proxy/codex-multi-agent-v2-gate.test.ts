@@ -63,6 +63,58 @@ describe("Codex MultiAgentV2 provider gate", () => {
     ).toBe(true);
   });
 
+  test("recognizes a real Codex subagent turn after collaboration tools are stripped", () => {
+    const session = createSession("portable", {
+      client_metadata: {
+        "x-openai-subagent": "worker",
+        "x-codex-parent-thread-id": "parent-thread",
+      },
+      tools: [{ type: "function", name: "exec_command", parameters: { type: "object" } }],
+      input: [
+        {
+          type: "agent_message",
+          content: [
+            { type: "input_text", text: "Message Type: NEW_TASK\nPayload:\n" },
+            { type: "encrypted_content", encrypted_content: "Readable delegated task." },
+          ],
+        },
+      ],
+    });
+
+    expect(isCodexMultiAgentV2Request(session)).toBe(true);
+  });
+
+  test("does not infer a subagent turn from agent_message or metadata alone", () => {
+    const agentMessage = {
+      input: [
+        {
+          type: "agent_message",
+          content: [{ type: "encrypted_content", encrypted_content: "Readable delegated task." }],
+        },
+      ],
+    };
+    expect(isCodexMultiAgentV2Request(createSession("portable", agentMessage))).toBe(false);
+    expect(
+      isCodexMultiAgentV2Request(
+        createSession("portable", {
+          ...agentMessage,
+          client_metadata: { "x-openai-subagent": "worker" },
+        })
+      )
+    ).toBe(false);
+    expect(
+      isCodexMultiAgentV2Request(
+        createSession("portable", {
+          client_metadata: {
+            "x-openai-subagent": "worker",
+            "x-codex-parent-thread-id": "parent-thread",
+          },
+          input: [{ type: "message", role: "user", content: [] }],
+        })
+      )
+    ).toBe(false);
+  });
+
   test("does not accept same-name business tools or malformed namespaces", () => {
     const standalone = collaborationNamespace().tools[0];
     expect(hasCodexMultiAgentV2ToolSchema({ tools: [standalone] })).toBe(false);

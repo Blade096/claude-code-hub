@@ -209,6 +209,12 @@ function isWsClosingOrClosed(ws: WebSocketType): boolean {
 
 function closeWs(ws: WebSocketType, code: number): void {
   try {
+    if (ws.readyState === 0) {
+      ws.once("error", () => undefined);
+      ws.terminate?.();
+      return;
+    }
+    if (isWsClosingOrClosed(ws)) return;
     ws.close(code);
   } catch {
     // ignore
@@ -217,6 +223,8 @@ function closeWs(ws: WebSocketType, code: number): void {
 
 function terminateWs(ws: WebSocketType): void {
   try {
+    if (isWsClosingOrClosed(ws)) return;
+    ws.once("error", () => undefined);
     ws.terminate?.();
   } catch {
     // ignore

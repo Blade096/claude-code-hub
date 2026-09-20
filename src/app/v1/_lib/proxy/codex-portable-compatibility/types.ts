@@ -14,7 +14,7 @@ export type PortableCollaborationAction = (typeof PORTABLE_COLLABORATION_ACTIONS
 export type PortableToolIdentityMapping = {
   encodedNamespace: string;
   originalNamespace: string;
-  originalName: PortableCollaborationAction;
+  originalName: string;
 };
 
 export type PortableTransformation =

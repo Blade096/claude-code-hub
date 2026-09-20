@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import {
+  createPortableResponseRestoreState,
   PortableCompatibilityError,
+  restorePortableCompatibilityEventPayload,
   restorePortableCompatibilityPayload,
   restorePortableCompatibilityResponse,
   type PortableTransformationMetadata,
@@ -61,6 +63,87 @@ function metadata(
 }
 
 describe("Codex MultiAgentV2 portable response codec", () => {
+  test("does not validate ordinary function-call sequencing for input-only transformations", () => {
+    const inputOnly = metadata();
+    inputOnly.toolMappings = [];
+    inputOnly.transformations = ["agent_message_input"];
+    inputOnly.audit.transformations = ["agent_message_input"];
+    const event = {
+      type: "response.function_call_arguments.delta",
+      item_id: "fc_exec",
+      output_index: 0,
+      delta: "{}",
+    };
+
+    expect(
+      restorePortableCompatibilityEventPayload(
+        event,
+        inputOnly,
+        createPortableResponseRestoreState()
+      )
+    ).toEqual({ payload: event, restoredCount: 0 });
+  });
+
+  test("does not bind ordinary function calls while restoring collaboration tools", () => {
+    const state = metadata();
+    const restoreState = createPortableResponseRestoreState();
+    const added = {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { type: "function_call", id: "fc_exec", name: "exec_command" },
+    };
+    const delta = {
+      type: "response.function_call_arguments.delta",
+      item_id: "fc_exec",
+      output_index: 0,
+      delta: "{}",
+    };
+
+    expect(restorePortableCompatibilityEventPayload(added, state, restoreState)).toEqual({
+      payload: added,
+      restoredCount: 0,
+    });
+    expect(restorePortableCompatibilityEventPayload(delta, state, restoreState)).toEqual({
+      payload: delta,
+      restoredCount: 0,
+    });
+  });
+
+  test("restores tools without encrypted messages after the whole namespace is renamed", () => {
+    const state = metadata();
+    state.toolMappings.push({
+      encodedNamespace: "collaboration-optimize",
+      originalNamespace: "collaboration",
+      originalName: "wait_agent",
+    } as PortableTransformationMetadata["toolMappings"][number]);
+    const payload = {
+      output: [
+        {
+          type: "function_call",
+          call_id: "call_wait",
+          namespace: "collaboration-optimize",
+          name: "wait_agent",
+          arguments: "{}",
+        },
+      ],
+    };
+
+    expect(restorePortableCompatibilityPayload(payload, state)).toEqual({
+      payload: {
+        output: [
+          {
+            type: "function_call",
+            call_id: "call_wait",
+            namespace: "collaboration",
+            name: "wait_agent",
+            arguments: "{}",
+          },
+        ],
+      },
+      restoredCount: 1,
+    });
+  });
+
   test.each(
     COLLABORATION_ACTIONS.flatMap((action) => [
       {

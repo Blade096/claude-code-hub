@@ -3,8 +3,8 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 
 export type QualificationProviderKind = "deepseek" | "glm";
 export type QualificationHistoryMode = "none" | "recent" | "all";
-export type QualificationTransport = "http" | "sse" | "websocket";
-export type QualificationResult = "passed" | "failed" | "blocked" | "unsupported";
+export type QualificationTransport = "http" | "sse";
+export type QualificationResult = "passed" | "failed" | "blocked";
 
 export type QualificationProvider = {
   kind: QualificationProviderKind | "native";
@@ -12,7 +12,6 @@ export type QualificationProvider = {
   name: string;
   model: string;
   mode: "native" | "portable";
-  websocketCapability: "supported" | "unsupported" | "not_applicable";
   upstreamErrorModel: string | null;
 };
 
@@ -44,7 +43,7 @@ export type QualificationCase = {
     | "recovery";
   historyMode: QualificationHistoryMode;
   transport: QualificationTransport;
-  expected: "success" | "capability_error" | "failure_then_recovery";
+  expected: "success" | "failure_then_recovery";
 };
 
 export type PortableAudit = {
@@ -171,14 +170,6 @@ function safeEvidenceLabel(value: string, name: string): string {
   return value;
 }
 
-function websocketCapability(env: NodeJS.ProcessEnv, prefix: string) {
-  const value = required(env, `${prefix}_WS_CAPABILITY`);
-  if (value !== "supported" && value !== "unsupported") {
-    throw new Error(`${prefix}_WS_CAPABILITY must be supported or unsupported.`);
-  }
-  return value;
-}
-
 function provider(
   env: NodeJS.ProcessEnv,
   prefix: string,
@@ -192,7 +183,6 @@ function provider(
     name: safeEvidenceLabel(required(env, `${prefix}_PROVIDER_NAME`), `${prefix}_PROVIDER_NAME`),
     model: safeEvidenceLabel(required(env, `${prefix}_MODEL`), `${prefix}_MODEL`),
     mode: "portable",
-    websocketCapability: websocketCapability(env, prefix),
     upstreamErrorModel: safeEvidenceLabel(
       required(env, `${prefix}_UPSTREAM_ERROR_MODEL`),
       `${prefix}_UPSTREAM_ERROR_MODEL`
@@ -258,7 +248,7 @@ export function readPortableQualificationConfig(
       "CCH_PORTABLE_QUALIFICATION_CCH_COMMIT"
     ),
     caseTimeoutMs: duration(env, "CCH_PORTABLE_QUALIFICATION_CASE_TIMEOUT_MS", 180_000),
-    cancelAfterMs: duration(env, "CCH_PORTABLE_QUALIFICATION_CANCEL_AFTER_MS", 500),
+    cancelAfterMs: duration(env, "CCH_PORTABLE_QUALIFICATION_CANCEL_AFTER_MS", 100),
     native: {
       kind: "native",
       id: positiveInt(env, "CCH_PORTABLE_QUALIFICATION_NATIVE_PROVIDER_ID"),
@@ -271,7 +261,6 @@ export function readPortableQualificationConfig(
         "CCH_PORTABLE_QUALIFICATION_NATIVE_MODEL"
       ),
       mode: "native",
-      websocketCapability: "not_applicable",
       upstreamErrorModel: null,
     },
     deepseek: provider(env, "CCH_PORTABLE_QUALIFICATION_DEEPSEEK", "deepseek"),
@@ -287,15 +276,9 @@ export function assertEvidencePathOutsideRepository(path: string, repositoryRoot
   }
 }
 
-export function buildQualificationCases(
-  deepseekWs: "supported" | "unsupported",
-  glmWs: "supported" | "unsupported"
-): QualificationCase[] {
+export function buildQualificationCases(): QualificationCase[] {
   const cases: QualificationCase[] = [];
-  for (const [kind, wsCapability] of [
-    ["deepseek", deepseekWs],
-    ["glm", glmWs],
-  ] as const) {
+  for (const kind of ["deepseek", "glm"] as const) {
     for (const historyMode of ["none", "recent", "all"] as const) {
       cases.push({
         caseId: `${kind}_lifecycle_${historyMode}_sse`,
@@ -313,14 +296,6 @@ export function buildQualificationCases(
       historyMode: "none",
       transport: "http",
       expected: "success",
-    });
-    cases.push({
-      caseId: `${kind}_lifecycle_none_websocket`,
-      providerKind: kind,
-      operation: "lifecycle",
-      historyMode: "none",
-      transport: "websocket",
-      expected: wsCapability === "supported" ? "success" : "capability_error",
     });
     for (const operation of ["cancellation", "timeout", "upstream_error"] as const) {
       cases.push({

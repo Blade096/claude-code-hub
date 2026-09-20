@@ -15,6 +15,8 @@ export type SseTransformHooks = {
   transformJson: (payload: unknown) => SseJsonTransformResult;
   onFailure: (error: unknown) => void;
   onFinalize: () => void;
+  validateEnd?: () => void;
+  onCancel?: (reason: unknown) => void;
   safeError?: (error: unknown) => {
     type: string;
     message: string;
@@ -171,6 +173,7 @@ export function transformPortableSseResponse(
                 fieldPath: "event.framing",
               });
             }
+            hooks.validateEnd?.();
             for (const text of output) {
               if (text.length > 0) controller.enqueue(encoder.encode(text));
             }
@@ -206,6 +209,7 @@ export function transformPortableSseResponse(
       cancelled = true;
       closed = true;
       try {
+        hooks.onCancel?.(reason);
         await reader.cancel(reason);
       } finally {
         finalize();

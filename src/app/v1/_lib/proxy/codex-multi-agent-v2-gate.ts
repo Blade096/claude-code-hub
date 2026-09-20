@@ -81,6 +81,35 @@ function classifyCodexMultiAgentV2ToolSchema(
   return valid ? "valid" : "absent";
 }
 
+function hasCodexSubagentEnvelope(message: Record<string, unknown>): boolean {
+  const metadata = message.client_metadata;
+  if (!isRecord(metadata)) return false;
+
+  const subagent = metadata["x-openai-subagent"];
+  const parentThreadId = metadata["x-codex-parent-thread-id"];
+  if (
+    typeof subagent !== "string" ||
+    subagent.trim().length === 0 ||
+    typeof parentThreadId !== "string" ||
+    parentThreadId.trim().length === 0
+  ) {
+    return false;
+  }
+
+  return (
+    Array.isArray(message.input) &&
+    message.input.some((item) => isRecord(item) && item.type === "agent_message")
+  );
+}
+
+function classifyCodexMultiAgentV2Request(
+  message: Record<string, unknown>
+): CollaborationSchemaClassification {
+  const schema = classifyCodexMultiAgentV2ToolSchema(message);
+  if (schema !== "absent") return schema;
+  return hasCodexSubagentEnvelope(message) ? "valid" : "absent";
+}
+
 /**
  * Codex may place additional tools directly in `tools`, or inside an
  * `additional_tools` input item. Only the official encrypted collaboration
@@ -99,7 +128,7 @@ function isOfficialCodexResponsesRequest(session: ProxySession): boolean {
 export function isCodexMultiAgentV2Request(session: ProxySession): boolean {
   return (
     isOfficialCodexResponsesRequest(session) &&
-    classifyCodexMultiAgentV2ToolSchema(session.request.message) === "valid"
+    classifyCodexMultiAgentV2Request(session.request.message) === "valid"
   );
 }
 
@@ -108,9 +137,13 @@ function resolveMode(session: ProxySession): CodexMultiAgentV2Mode {
 }
 
 /**
- * Read-only portable preflight shared by transport-adjacent paths that must
- * decide before mutating the request. Internal compaction summary calls are
- * deliberately excluded even though they retain the outer request's tools.
+ * Read-only compatibility preflight shared by transport-adjacent paths that
+ * must decide before mutating the request. Portable requests always need the
+ * shared response pipeline. Native root requests need it when their tool
+ * schema will be prepared to prevent encrypted delegation; native child
+ * envelopes without collaboration tools remain byte-for-byte native.
+ * Internal compaction summary calls are deliberately excluded even though
+ * they retain the outer request's tools.
  */
 export function isPortableCodexMultiAgentV2Request(
   session: ProxySession,
@@ -118,14 +151,18 @@ export function isPortableCodexMultiAgentV2Request(
 ): boolean {
   if (!compatibilityEnabled) return false;
   if (session.isInternalCompactionRequest?.() === true) return false;
-  return resolveMode(session) === "portable" && isCodexMultiAgentV2Request(session);
+  if (!isCodexMultiAgentV2Request(session)) return false;
+
+  const mode = resolveMode(session);
+  if (mode === "portable") return true;
+  return mode === "native" && hasCodexMultiAgentV2ToolSchema(session.request.message);
 }
 
 export class ProxyCodexMultiAgentV2Gate {
   static async ensure(session: ProxySession): Promise<Response | null> {
     if (!isOfficialCodexResponsesRequest(session)) return null;
 
-    const schema = classifyCodexMultiAgentV2ToolSchema(session.request.message);
+    const schema = classifyCodexMultiAgentV2Request(session.request.message);
     if (schema === "absent") return null;
 
     const mode = resolveMode(session);

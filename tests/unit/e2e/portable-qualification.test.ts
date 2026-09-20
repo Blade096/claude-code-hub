@@ -16,6 +16,16 @@ import {
   type QualificationCase,
   type QualificationEvidence,
 } from "../../e2e/_helpers/portable-qualification";
+import {
+  cleanupQualificationHomes,
+  writeCodexHome,
+} from "../../e2e/_helpers/portable-qualification-invocation";
+import { buildLifecyclePrompt } from "../../e2e/_helpers/portable-qualification-lifecycle";
+import {
+  isTargetChildAudit,
+  usageItemMatchesProvider,
+} from "../../e2e/_helpers/portable-qualification-assertions";
+import { analyzeLifecycleRollouts } from "../../e2e/_helpers/portable-qualification-rollout";
 
 const repositoryRoot = resolve(__dirname, "../../..");
 
@@ -42,14 +52,12 @@ function completeEnv(): NodeJS.ProcessEnv {
     CCH_PORTABLE_QUALIFICATION_DEEPSEEK_PROVIDER_NAME: "deepseek-portable",
     CCH_PORTABLE_QUALIFICATION_DEEPSEEK_MODEL: "deepseek-agent",
     CCH_PORTABLE_QUALIFICATION_DEEPSEEK_UPSTREAM_ERROR_MODEL: "deepseek-error-fixture",
-    CCH_PORTABLE_QUALIFICATION_DEEPSEEK_WS_CAPABILITY: "unsupported",
     CCH_PORTABLE_QUALIFICATION_GLM_TYPE: "codex",
     CCH_PORTABLE_QUALIFICATION_GLM_MODE: "portable",
     CCH_PORTABLE_QUALIFICATION_GLM_PROVIDER_ID: "30",
     CCH_PORTABLE_QUALIFICATION_GLM_PROVIDER_NAME: "glm-portable",
     CCH_PORTABLE_QUALIFICATION_GLM_MODEL: "glm-agent",
     CCH_PORTABLE_QUALIFICATION_GLM_UPSTREAM_ERROR_MODEL: "glm-error-fixture",
-    CCH_PORTABLE_QUALIFICATION_GLM_WS_CAPABILITY: "supported",
   };
 }
 
@@ -132,14 +140,13 @@ describe("portable real qualification configuration", () => {
     }
   });
 
-  test("validates numeric, duration, websocket and protocol fields", () => {
+  test("validates numeric, duration and protocol fields", () => {
     const invalidMutations: Array<[string, string, string]> = [
       ["CCH_PORTABLE_QUALIFICATION_NATIVE_PROVIDER_ID", "0", "positive integer"],
       ["CCH_PORTABLE_QUALIFICATION_NATIVE_PROVIDER_ID", "1.5", "positive integer"],
       ["CCH_PORTABLE_QUALIFICATION_CASE_TIMEOUT_MS", "99", "between 100"],
       ["CCH_PORTABLE_QUALIFICATION_CASE_TIMEOUT_MS", "1800001", "between 100"],
       ["CCH_PORTABLE_QUALIFICATION_CASE_TIMEOUT_MS", "not-a-number", "between 100"],
-      ["CCH_PORTABLE_QUALIFICATION_DEEPSEEK_WS_CAPABILITY", "maybe", "supported or unsupported"],
       ["CCH_PORTABLE_QUALIFICATION_BASE_URL", "ftp://cch.example.test", "http or https"],
     ];
     for (const [name, value, message] of invalidMutations) {
@@ -188,18 +195,34 @@ describe("portable real qualification configuration", () => {
     expect(config).toMatchObject({
       adminToken: "admin-secret-value",
       proxyKey: "proxy-secret-value",
-      deepseek: { kind: "deepseek", mode: "portable", websocketCapability: "unsupported" },
-      glm: { kind: "glm", mode: "portable", websocketCapability: "supported" },
+      deepseek: { kind: "deepseek", mode: "portable" },
+      glm: { kind: "glm", mode: "portable" },
       native: { kind: "native", mode: "native" },
     });
     expect(JSON.stringify(config?.deepseek)).not.toContain("secret-value");
   });
+
+  test("disables plugin synchronization in isolated Codex homes", async () => {
+    const config = readPortableQualificationConfig(
+      completeEnv(),
+      repositoryRoot
+    ) as PortableQualificationConfig;
+
+    try {
+      const { home } = await writeCodexHome(config, config.deepseek);
+      const toml = await readFile(resolve(home, "config.toml"), "utf8");
+      expect(toml).toContain("multi_agent_v2 = true");
+      expect(toml).toContain("plugins = false");
+    } finally {
+      await cleanupQualificationHomes();
+    }
+  });
 });
 
 describe("portable real qualification matrix", () => {
-  test("covers both portable families, all history modes, transport capability and faults", () => {
-    const cases = buildQualificationCases("unsupported", "supported");
-    expect(cases).toHaveLength(17);
+  test("covers both portable families, all history modes, HTTP/SSE and faults", () => {
+    const cases = buildQualificationCases();
+    expect(cases).toHaveLength(15);
 
     for (const providerKind of ["deepseek", "glm"] as const) {
       const providerCases = cases.filter((item) => item.providerKind === providerKind);
@@ -218,12 +241,7 @@ describe("portable real qualification matrix", () => {
       ).toBe(true);
     }
 
-    expect(
-      cases.find((item) => item.caseId === "deepseek_lifecycle_none_websocket")?.expected
-    ).toBe("capability_error");
-    expect(cases.find((item) => item.caseId === "glm_lifecycle_none_websocket")?.expected).toBe(
-      "success"
-    );
+    expect(cases.map((item) => item.transport)).not.toContain("websocket");
     expect(cases.some((item) => item.providerKind === "native")).toBe(true);
   });
 });
@@ -243,6 +261,42 @@ describe("portable qualification evidence safety", () => {
       ],
     };
     expect(findPortableAudits(response)).toEqual([portable]);
+  });
+
+  test("matches native provider identity from the real usage API provider chain", () => {
+    const item = {
+      providerName: "native-root",
+      model: "gpt-native",
+      providerChain: [
+        { id: 10, name: "native-root", reason: "initial_selection" },
+        { id: 10, name: "native-root", reason: "request_success" },
+      ],
+    };
+    expect(usageItemMatchesProvider(item, 10, "native-root")).toBe(true);
+    expect(usageItemMatchesProvider(item, 11, "native-root")).toBe(false);
+    expect(usageItemMatchesProvider(item, 10, "different-provider")).toBe(false);
+  });
+
+  test("separates target child audits from native root audits sharing one session", () => {
+    const target = config.deepseek;
+    const child = audit({
+      sessionId: "shared-root-session",
+      transformations: ["agent_message_input"],
+      responseRestore: "not_needed",
+    });
+    const root = audit({
+      sessionId: "shared-root-session",
+      requestedProviderId: config.native.id,
+      requestedProviderName: config.native.name,
+      actualProviderId: config.native.id,
+      actualProviderName: config.native.name,
+      requestedModel: config.native.model,
+      actualModel: config.native.model,
+      transformations: ["collaboration_namespace"],
+    });
+
+    expect(isTargetChildAudit(child, target, target.model)).toBe(true);
+    expect(isTargetChildAudit(root, target, target.model)).toBe(false);
   });
 
   test("parses safe status and usage without retaining tool prompts", () => {
@@ -447,41 +501,6 @@ describe("portable qualification evidence safety", () => {
     });
   });
 
-  test("preserves a null actual transport for unsupported websocket evidence", () => {
-    const unsupportedCase: QualificationCase = {
-      ...sampleCase(),
-      caseId: "deepseek_lifecycle_none_websocket",
-      transport: "websocket",
-      expected: "capability_error",
-    };
-    const evidence = buildEvidence({
-      caseInfo: unsupportedCase,
-      config,
-      audit: audit({
-        state: "failed",
-        requestedTransport: "websocket",
-        actualTransport: null,
-        responseRestore: "not_started",
-        errorCategory: "compatibility_transport_unsupported",
-      }),
-      run: {
-        threadId: "thread-safe",
-        relatedThreadIds: [],
-        usage: null,
-        finalMessage: null,
-        failed: true,
-        collabTools: [],
-        collabAgentMessages: [],
-      },
-      result: "unsupported",
-    });
-
-    expect(evidence).toMatchObject({
-      transport: null,
-      stableErrorCode: "compatibility_transport_unsupported",
-    });
-  });
-
   test("writes exactly one allowlisted JSONL record", async () => {
     const directory = await mkdtemp(resolve(tmpdir(), "portable-evidence-test-"));
     const path = resolve(directory, "evidence.jsonl");
@@ -511,5 +530,221 @@ describe("portable qualification evidence safety", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("portable qualification isolated rollout evidence", () => {
+  const rootThread = {
+    id: "root-thread",
+    rolloutPath: "root.jsonl",
+    agentPath: null,
+  };
+  const childThread = {
+    id: "child-thread",
+    rolloutPath: "child.jsonl",
+    agentPath: "/root/deepseek-child",
+  };
+  const startedAt = Date.parse("2026-09-21T00:00:00.000Z");
+  const sentinels = ["OLD_MARKER", "RECENT_MARKER", "LIVE_NONCE", "FOLLOWUP_NONCE"];
+
+  test("places the recent-history marker in the current parent turn", () => {
+    const prompt = buildLifecyclePrompt(
+      { ...sampleCase(), historyMode: "recent" },
+      {
+        kind: "deepseek",
+        id: 20,
+        name: "deepseek-portable",
+        model: "deepseek-agent",
+        mode: "portable",
+        upstreamErrorModel: "deepseek-error-fixture",
+      },
+      sentinels[1]!,
+      sentinels[2]!,
+      sentinels[3]!
+    );
+
+    expect(prompt).toContain(`Current-turn inherited history marker: ${sentinels[1]}.`);
+    expect(prompt).toContain("fork_turns=1");
+    expect(prompt).toContain("use its wait collaboration tool");
+    expect(prompt).toContain("must not complete before acknowledging that nonce");
+  });
+
+  function line(offsetMs: number, type: string, payload: Record<string, unknown>): string {
+    return JSON.stringify({
+      timestamp: new Date(startedAt + offsetMs).toISOString(),
+      type,
+      payload,
+    });
+  }
+
+  function functionCall(
+    offsetMs: number,
+    name: string,
+    callId: string,
+    args: Record<string, unknown>
+  ): string {
+    return line(offsetMs, "response_item", {
+      type: "function_call",
+      name,
+      call_id: callId,
+      arguments: JSON.stringify(args),
+    });
+  }
+
+  function functionOutput(offsetMs: number, callId: string): string {
+    return line(offsetMs, "response_item", {
+      type: "function_call_output",
+      call_id: callId,
+      output: JSON.stringify({ ok: true }),
+    });
+  }
+
+  function activity(offsetMs: number, id: string, kind: string): string {
+    return line(offsetMs, "event_msg", {
+      type: "item_completed",
+      item: {
+        type: "SubAgentActivity",
+        id,
+        kind,
+        agent_thread_id: childThread.id,
+        agent_path: childThread.agentPath,
+      },
+    });
+  }
+
+  function completeRootRollout(): string {
+    return [
+      functionCall(10, "spawn_agent", "call-spawn", {
+        task_name: "deepseek-child",
+        agent_type: "deepseek",
+        fork_turns: "1",
+        message: "Report inherited markers without receiving their values.",
+      }),
+      functionOutput(20, "call-spawn"),
+      activity(30, "call-spawn", "started"),
+      functionCall(40, "send_message", "call-send", {
+        target: childThread.agentPath,
+        message: sentinels[2],
+      }),
+      functionOutput(50, "call-send"),
+      activity(60, "call-send", "interacted"),
+      activity(70, "completion-one", "completed"),
+      functionCall(80, "followup_task", "call-followup", {
+        target: childThread.agentPath,
+        message: sentinels[3],
+      }),
+      functionOutput(90, "call-followup"),
+      activity(100, "call-followup", "interacted"),
+      activity(110, "completion-two", "completed"),
+      line(120, "response_item", {
+        type: "agent_message",
+        content: [{ type: "input_text", text: `${sentinels[2]} ${sentinels[3]}` }],
+      }),
+    ].join("\n");
+  }
+
+  const childRollout = [
+    line(-500, "response_item", {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: sentinels[1] }],
+    }),
+    line(115, "response_item", {
+      type: "message",
+      role: "assistant",
+      content: [
+        {
+          type: "output_text",
+          text: `${sentinels[2]} ${sentinels[3]}`,
+        },
+      ],
+    }),
+  ].join("\n");
+
+  test("proves the lifecycle from full rollout even when exec JSON only exposes wait", () => {
+    const trace = analyzeLifecycleRollouts({
+      rootThread,
+      childThread,
+      rootJsonl: completeRootRollout(),
+      childJsonl: childRollout,
+      startedAt,
+      sentinels,
+      historyMode: "recent",
+    });
+
+    expect(trace).toMatchObject({
+      rootThreadId: rootThread.id,
+      childThreadId: childThread.id,
+      childAgentPath: childThread.agentPath,
+      observedActions: ["spawn_agent", "send_message", "followup_task"],
+      stateEdgeVerified: true,
+      actionSequenceComplete: true,
+      toolOutputsComplete: true,
+      sendWhileRunning: true,
+      followupAfterCompletion: true,
+      parentReceivedResults: true,
+      childReturnedLiveNonce: true,
+      childReturnedFollowupNonce: true,
+      historyBoundaryMatches: true,
+      historyOldMarkerObserved: false,
+      historyRecentMarkerObserved: true,
+      toolArgumentsExcludeHistoryMarkers: true,
+    });
+  });
+
+  test("uses rollout order when send and completion share one timestamp", () => {
+    const rootJsonl = completeRootRollout().replace(
+      new Date(startedAt + 70).toISOString(),
+      new Date(startedAt + 40).toISOString()
+    );
+    const trace = analyzeLifecycleRollouts({
+      rootThread,
+      childThread,
+      rootJsonl,
+      childJsonl: childRollout,
+      startedAt,
+      sentinels,
+      historyMode: "recent",
+    });
+
+    expect(trace.sendWhileRunning).toBe(true);
+  });
+
+  test("does not accept model self-report when the stored follow-up call is absent", () => {
+    const incompleteRoot = completeRootRollout()
+      .split("\n")
+      .filter((entry) => !entry.includes("call-followup") && !entry.includes("completion-two"))
+      .join("\n");
+    const trace = analyzeLifecycleRollouts({
+      rootThread,
+      childThread,
+      rootJsonl: incompleteRoot,
+      childJsonl: childRollout,
+      startedAt,
+      sentinels,
+      historyMode: "recent",
+    });
+
+    expect(trace.actionSequenceComplete).toBe(false);
+    expect(trace.toolOutputsComplete).toBe(false);
+    expect(trace.followupAfterCompletion).toBe(false);
+  });
+
+  test("rejects inherited history leaked into collaboration arguments", () => {
+    const leaked = completeRootRollout().replace(
+      "Report inherited markers without receiving their values.",
+      `Leaked ${sentinels[0]}`
+    );
+    const trace = analyzeLifecycleRollouts({
+      rootThread,
+      childThread,
+      rootJsonl: leaked,
+      childJsonl: childRollout,
+      startedAt,
+      sentinels,
+      historyMode: "recent",
+    });
+
+    expect(trace.toolArgumentsExcludeHistoryMarkers).toBe(false);
   });
 });

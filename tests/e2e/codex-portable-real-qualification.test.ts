@@ -23,7 +23,6 @@ import {
   usageItems,
   validateHttpNonStream,
   validateSuccessfulLifecycle,
-  validateUnsupportedWebsocket,
 } from "./_helpers/portable-qualification-assertions";
 import {
   executeHttpNonStreamQualification,
@@ -55,10 +54,7 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
   }
   const qualification: PortableQualificationConfig = config;
   const invocation = resolveCodexInvocation(qualification.codexBin);
-  const cases = buildQualificationCases(
-    qualification.deepseek.websocketCapability as "supported" | "unsupported",
-    qualification.glm.websocketCapability as "supported" | "unsupported"
-  );
+  const cases = buildQualificationCases();
   const secrets = [qualification.adminToken, qualification.proxyKey];
 
   beforeAll(() => {
@@ -108,10 +104,7 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
         const target = qualification[caseInfo.providerKind as "deepseek" | "glm"];
         const result = await executeLifecycle(qualification, invocation, caseInfo);
         await assertNativeRootUsage(qualification, result.run, caseInfo.caseId, result.sentinels);
-        const audit =
-          caseInfo.expected === "capability_error"
-            ? validateUnsupportedWebsocket(caseInfo, target, result)
-            : validateSuccessfulLifecycle(caseInfo, target, result);
+        const audit = validateSuccessfulLifecycle(caseInfo, target, result);
         await assertOperationalLogsClean(qualification.logPaths, [...secrets, ...result.sentinels]);
         await appendSafeEvidence(
           qualification.evidencePath,
@@ -120,7 +113,7 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
             config: qualification,
             audit,
             run: result.run,
-            result: caseInfo.expected === "capability_error" ? "unsupported" : "passed",
+            result: "passed",
           }),
           secrets,
           result.sentinels
@@ -222,7 +215,7 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
   test(
     nativeCase.caseId,
     async () => {
-      const { home, workdir } = await writeCodexHome(qualification, qualification.deepseek, "sse");
+      const { home, workdir } = await writeCodexHome(qualification, qualification.deepseek);
       const sentinel = randomMarker("NATIVE_CONTROL");
       const startedAt = Date.now();
       const processResult = await runCodexProcess(
@@ -249,10 +242,42 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
             item.originalModel === qualification.native.model)
       );
       requireQualification(nativeLog, nativeCase.caseId, "native provider usage log is missing");
+      const nativePreparationAudit = findPortableAudits(logs).find(
+        (item) =>
+          item.actualProviderId === qualification.native.id &&
+          item.actualProviderName === qualification.native.name &&
+          item.actualModel === qualification.native.model
+      );
       requireQualification(
-        findPortableAudits(logs).length === 0,
+        nativePreparationAudit,
         nativeCase.caseId,
-        "native control unexpectedly produced a portable audit"
+        "native root tool preparation audit is missing"
+      );
+      requireQualification(
+        nativePreparationAudit.state === "response_restored" &&
+          nativePreparationAudit.responseRestore === "not_needed" &&
+          nativePreparationAudit.errorCategory === null,
+        nativeCase.caseId,
+        "native root tool preparation did not finish cleanly"
+      );
+      requireQualification(
+        [
+          "spawn_agent_message_schema",
+          "send_message_message_schema",
+          "followup_task_message_schema",
+          "collaboration_namespace",
+        ].every((transformation) =>
+          nativePreparationAudit.transformations.includes(transformation)
+        ) && !nativePreparationAudit.transformations.includes("agent_message_input"),
+        nativeCase.caseId,
+        "native root audit does not match tool-only preparation"
+      );
+      requireQualification(
+        nativePreparationAudit.requestId !== null &&
+          nativePreparationAudit.sessionId !== null &&
+          nativePreparationAudit.responseId !== null,
+        nativeCase.caseId,
+        "native root audit correlation identifiers are incomplete"
       );
       await assertOperationalLogsClean(qualification.logPaths, [...secrets, sentinel]);
       await appendSafeEvidence(
@@ -260,14 +285,9 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
         buildEvidence({
           caseInfo: nativeCase,
           config: qualification,
+          audit: nativePreparationAudit,
           run,
           result: "passed",
-          actual: {
-            providerId: qualification.native.id,
-            providerName: qualification.native.name,
-            model: qualification.native.model,
-            transport: "sse",
-          },
         }),
         secrets,
         [sentinel]

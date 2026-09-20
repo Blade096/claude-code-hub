@@ -110,9 +110,15 @@ describe("portable MultiAgentV2 fake-streaming bypass", () => {
     );
   });
 
-  test("pure preflight excludes internal compaction and requires the enabled portable mode", () => {
+  test("pure preflight covers every request that needs compatibility response restoration", () => {
     expect(isPortableCodexMultiAgentV2Request(makeSession({ mode: "portable" }), true)).toBe(true);
-    expect(isPortableCodexMultiAgentV2Request(makeSession({ mode: "native" }), true)).toBe(false);
+    expect(isPortableCodexMultiAgentV2Request(makeSession({ mode: "native" }), true)).toBe(true);
+    expect(
+      isPortableCodexMultiAgentV2Request(
+        makeSession({ mode: "native", collaboration: false }),
+        true
+      )
+    ).toBe(false);
     expect(isPortableCodexMultiAgentV2Request(makeSession({ mode: "portable" }), false)).toBe(
       false
     );
@@ -124,21 +130,24 @@ describe("portable MultiAgentV2 fake-streaming bypass", () => {
     ).toBe(false);
   });
 
-  test("portable V2 bypasses before fake streaming mutates or forwards the request", async () => {
-    const session = makeSession({ mode: "portable" });
-    const originalMessage = structuredClone(session.request.message);
-    const originalUrl = session.requestUrl.toString();
+  test.each(["portable", "native"] as const)(
+    "%s V2 that needs compatibility restoration bypasses fake streaming",
+    async (mode) => {
+      const session = makeSession({ mode });
+      const originalMessage = structuredClone(session.request.message);
+      const originalUrl = session.requestUrl.toString();
 
-    await expect(tryFakeStreamingPath(session, settings())).resolves.toBeNull();
+      await expect(tryFakeStreamingPath(session, settings())).resolves.toBeNull();
 
-    expect(mocks.send).not.toHaveBeenCalled();
-    expect(session.request.message).toEqual(originalMessage);
-    expect(session.requestUrl.toString()).toBe(originalUrl);
-    expect(session.getPortableTransformationMetadata?.()).toBeUndefined();
-  });
+      expect(mocks.send).not.toHaveBeenCalled();
+      expect(session.request.message).toEqual(originalMessage);
+      expect(session.requestUrl.toString()).toBe(originalUrl);
+      expect(session.getPortableTransformationMetadata?.()).toBeUndefined();
+    }
+  );
 
-  test("fails closed if a native fake-stream attempt switches to a portable provider", async () => {
-    const session = makeSession({ mode: "native" }) as ProxySession & {
+  test("fails closed if an ordinary fake-stream attempt becomes portable V2", async () => {
+    const session = makeSession({ mode: "native", collaboration: false }) as ProxySession & {
       clearResponseTimeout: (() => void) | null;
       releaseAgent: (() => void) | null;
     };
@@ -149,6 +158,7 @@ describe("portable MultiAgentV2 fake-streaming bypass", () => {
 
     mocks.send.mockImplementationOnce(async (activeSession: ProxySession) => {
       expect(activeSession.isFakeStreamingAttempt()).toBe(true);
+      activeSession.request.message.tools = [collaborationNamespace()];
       const portableProvider = {
         ...activeSession.provider,
         id: 43,
@@ -179,25 +189,33 @@ describe("portable MultiAgentV2 fake-streaming bypass", () => {
   });
 
   test.each([
-    { label: "native V2", session: () => makeSession({ mode: "native" }) },
+    {
+      label: "native V2 with compatibility disabled",
+      session: () => makeSession({ mode: "native" }),
+      compatibilityEnabled: false,
+    },
     {
       label: "ordinary Responses",
       session: () => makeSession({ mode: "portable", collaboration: false }),
+      compatibilityEnabled: true,
     },
-  ])("keeps existing fake-stream eligibility for $label", async ({ session: createSession }) => {
-    const session = createSession();
+  ])(
+    "keeps existing fake-stream eligibility for $label",
+    async ({ session: createSession, compatibilityEnabled }) => {
+      const session = createSession();
 
-    const response = await tryFakeStreamingPath(session, settings());
-    expect(response).not.toBeNull();
-    const body = await response!.text();
+      const response = await tryFakeStreamingPath(session, settings(compatibilityEnabled));
+      expect(response).not.toBeNull();
+      const body = await response!.text();
 
-    expect(mocks.send).toHaveBeenCalledOnce();
-    expect(session.request.message.stream).toBe(false);
-    expect(body).toContain("response.completed");
-  });
+      expect(mocks.send).toHaveBeenCalledOnce();
+      expect(session.request.message.stream).toBe(false);
+      expect(body).toContain("response.completed");
+    }
+  );
 
   test("keeps the whitelist opt-out behavior unchanged", async () => {
-    const session = makeSession({ mode: "native" });
+    const session = makeSession({ mode: "native", collaboration: false });
     const originalMessage = structuredClone(session.request.message);
 
     await expect(
@@ -248,6 +266,7 @@ describe("portable MultiAgentV2 fake-streaming bypass", () => {
   test("keeps non-stream fake responses and null abort-signal diagnostics intact", async () => {
     const session = makeSession({
       mode: "native",
+      collaboration: false,
       stream: false,
       clientAbortSignal: null,
     });

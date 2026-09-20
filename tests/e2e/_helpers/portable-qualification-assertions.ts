@@ -67,13 +67,31 @@ export async function assertOperationalLogsClean(
   }
 }
 
+export function isTargetChildAudit(
+  audit: PortableAudit,
+  target: QualificationProvider,
+  targetModel: string
+): boolean {
+  return (
+    audit.requestedProviderId === target.id &&
+    audit.requestedProviderName === target.name &&
+    audit.actualProviderId === target.id &&
+    audit.actualProviderName === target.name &&
+    audit.requestedModel === targetModel &&
+    audit.actualModel === targetModel &&
+    audit.transformations.includes("agent_message_input") &&
+    !audit.transformations.includes("collaboration_namespace")
+  );
+}
+
 export async function inspectPortableAudits(
   qualification: PortableQualificationConfig,
   run: ParsedCodexRun,
   target: QualificationProvider,
   targetModel: string,
   startedAt: number,
-  protectedValues: string[]
+  protectedValues: string[],
+  minimumRelatedTerminalAudits = 1
 ): Promise<PortableAudit[]> {
   const sessionIds = [run.threadId, ...run.relatedThreadIds].filter((value): value is string =>
     Boolean(value)
@@ -95,7 +113,17 @@ export async function inspectPortableAudits(
       audits = findPortableAudits(inspected);
     }
     assertNoProtectedText(inspected, protectedValues);
-    if (audits.some((item) => item.state === "response_restored" || item.state === "failed")) {
+    const terminal = audits.filter(
+      (item) => item.state === "response_restored" || item.state === "failed"
+    );
+    const relatedTerminal = terminal.filter((item) =>
+      isTargetChildAudit(item, target, targetModel)
+    );
+    if (
+      run.relatedThreadIds.length > 0
+        ? relatedTerminal.length >= minimumRelatedTerminalAudits
+        : terminal.length > 0
+    ) {
       return audits;
     }
     await new Promise((resolveWait) => setTimeout(resolveWait, 1_000));
@@ -119,12 +147,6 @@ export function requireQualification(
   if (!condition) throw new Error(`Qualification ${caseId} failed: ${reason}.`);
 }
 
-function expectedHistoryMarkers(mode: QualificationCase["historyMode"], sentinels: string[]) {
-  if (mode === "none") return [];
-  if (mode === "recent") return [sentinels[1]!];
-  return [sentinels[0]!, sentinels[1]!];
-}
-
 export function validateSuccessfulLifecycle(
   caseInfo: QualificationCase,
   target: QualificationProvider,
@@ -138,52 +160,32 @@ export function validateSuccessfulLifecycle(
   requireQualification(result.lifecycle, caseInfo.caseId, "structured lifecycle result is missing");
   const lifecycle = result.lifecycle;
   requireQualification(lifecycle.case_id === caseInfo.caseId, caseInfo.caseId, "case id mismatch");
+  requireQualification(result.trace, caseInfo.caseId, "isolated rollout trace is missing");
+  const trace = result.trace;
   requireQualification(
-    lifecycle.spawn_agent &&
-      lifecycle.send_message_while_running &&
-      lifecycle.followup_task_after_completion &&
-      lifecycle.parent_received_results,
+    trace.stateEdgeVerified && trace.actionSequenceComplete && trace.toolOutputsComplete,
     caseInfo.caseId,
-    "the full collaboration lifecycle was not observed"
+    `isolated rollout did not prove the complete collaboration action sequence (observed: ${JSON.stringify(trace.observedActions)})`
   );
   requireQualification(
-    lifecycle.live_nonce === result.sentinels[2] &&
-      lifecycle.followup_nonce === result.sentinels[3],
+    trace.sendWhileRunning && trace.followupAfterCompletion,
     caseInfo.caseId,
-    "the child did not return both lifecycle nonces"
-  );
-  const expectedMarkers = expectedHistoryMarkers(caseInfo.historyMode, result.sentinels);
-  requireQualification(
-    lifecycle.inherited_history_markers.length === expectedMarkers.length &&
-      expectedMarkers.every((marker) => lifecycle.inherited_history_markers.includes(marker)),
-    caseInfo.caseId,
-    "history inheritance did not match fork_turns"
+    `isolated rollout did not prove the required running/completed action order (sendWhileRunning=${trace.sendWhileRunning}, followupAfterCompletion=${trace.followupAfterCompletion})`
   );
   requireQualification(
-    ["spawn_agent", "send_message", "followup_task"].every((tool) =>
-      result.run.collabTools.includes(tool)
-    ),
+    trace.childReturnedLiveNonce && trace.childReturnedFollowupNonce && trace.parentReceivedResults,
     caseInfo.caseId,
-    "Codex JSONL did not contain the complete collaboration action sequence"
-  );
-  const directChildText = result.run.collabAgentMessages.join("\n");
-  requireQualification(
-    directChildText.includes(result.sentinels[2]!) &&
-      directChildText.includes(result.sentinels[3]!),
-    caseInfo.caseId,
-    "Codex child result events did not contain both lifecycle nonces"
+    "isolated child/parent rollouts did not contain both lifecycle results"
   );
   requireQualification(
-    expectedMarkers.every((marker) => directChildText.includes(marker)) &&
-      result.sentinels
-        .slice(0, 2)
-        .filter((marker) => !expectedMarkers.includes(marker))
-        .every((marker) => !directChildText.includes(marker)),
+    trace.historyBoundaryMatches && trace.toolArgumentsExcludeHistoryMarkers,
     caseInfo.caseId,
-    "direct child result events did not match the requested history boundary"
+    `isolated rollout did not prove the requested history boundary (old=${trace.historyOldMarkerObserved}, recent=${trace.historyRecentMarkerObserved}, argumentsClean=${trace.toolArgumentsExcludeHistoryMarkers})`
   );
 
-  const restored = result.audits.filter((item) => item.state === "response_restored");
+  const restored = result.audits.filter(
+    (item) => item.state === "response_restored" && isTargetChildAudit(item, target, target.model)
+  );
   requireQualification(restored.length >= 2, caseInfo.caseId, "child turns lack restored audits");
   for (const item of restored) {
     requireQualification(
@@ -204,8 +206,13 @@ export function validateSuccessfulLifecycle(
       caseInfo.caseId,
       "actual transport differs from the requested transport"
     );
+    const inputOnly =
+      item.transformations.includes("agent_message_input") &&
+      !item.transformations.includes("collaboration_namespace");
     requireQualification(
-      item.responseRestore === "restored" && item.errorCategory === null,
+      (item.responseRestore === "restored" ||
+        (inputOnly && item.responseRestore === "not_needed")) &&
+        item.errorCategory === null,
       caseInfo.caseId,
       "response restore did not finish cleanly"
     );
@@ -221,32 +228,6 @@ export function validateSuccessfulLifecycle(
     "agent_message compatibility transformation was not audited"
   );
   return restored[0]!;
-}
-
-export function validateUnsupportedWebsocket(
-  caseInfo: QualificationCase,
-  target: QualificationProvider,
-  result: LifecycleResult
-): PortableAudit {
-  const failed = result.audits.find(
-    (item) =>
-      item.state === "failed" && item.errorCategory === "compatibility_transport_unsupported"
-  );
-  requireQualification(failed, caseInfo.caseId, "stable transport capability error is missing");
-  requireQualification(
-    failed.requestedTransport === "websocket" &&
-      failed.actualTransport !== "http" &&
-      failed.actualTransport !== "sse",
-    caseInfo.caseId,
-    "unsupported websocket silently changed transport"
-  );
-  requireQualification(
-    (failed.actualProviderId === null || failed.actualProviderId === target.id) &&
-      (failed.requestedProviderId === null || failed.requestedProviderId === target.id),
-    caseInfo.caseId,
-    "unsupported websocket switched providers"
-  );
-  return failed;
 }
 
 export function validateHttpNonStream(
@@ -320,6 +301,24 @@ export function usageItems(value: unknown): Array<Record<string, unknown>> {
     : [];
 }
 
+export function usageItemMatchesProvider(
+  item: Record<string, unknown>,
+  providerId: number,
+  providerName: string
+): boolean {
+  if (item.providerName !== providerName) return false;
+  if (item.providerId === providerId || item.finalProviderId === providerId) return true;
+  if (!Array.isArray(item.providerChain)) return false;
+  return item.providerChain.some(
+    (entry) =>
+      Boolean(entry) &&
+      typeof entry === "object" &&
+      !Array.isArray(entry) &&
+      (entry as Record<string, unknown>).id === providerId &&
+      (entry as Record<string, unknown>).name === providerName
+  );
+}
+
 export async function assertNativeRootUsage(
   qualification: PortableQualificationConfig,
   run: ParsedCodexRun,
@@ -332,8 +331,7 @@ export async function assertNativeRootUsage(
     assertNoProtectedText(inspected, protectedValues);
     const nativeLog = usageItems(inspected).find(
       (item) =>
-        item.providerId === qualification.native.id &&
-        item.providerName === qualification.native.name &&
+        usageItemMatchesProvider(item, qualification.native.id, qualification.native.name) &&
         (item.model === qualification.native.model ||
           item.originalModel === qualification.native.model)
     );

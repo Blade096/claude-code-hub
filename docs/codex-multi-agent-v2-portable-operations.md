@@ -21,7 +21,7 @@ Portable 是协议兼容转换，不是解密。它只处理已经可读的 Code
 
 | 模式 | 行为 | 适用条件 |
 | --- | --- | --- |
-| `native` | 不运行 portable codec，保留 Codex collaboration wrapper 与 encrypted 语义；请求仍经过 CCH 既有通用处理 | OpenAI 原生端点，或已经完整支持 Codex MultiAgentV2 协议的端点 |
+| `native` | 总开关开启时，根请求会准备 collaboration 工具 schema 与命名空间，使 Codex 后续生成可读的委派消息；原生 child envelope 不做 portable `agent_message` 改写 | OpenAI 原生端点，或已经完整支持 Codex MultiAgentV2 child 协议的端点 |
 | `portable` | 在总开关开启且请求被可靠识别后，转换协作结构并恢复响应 | 明确支持 Responses API，但不支持 Codex opaque wrapper 的第三方端点 |
 | `disabled` | 明确拒绝该 Provider 上的 MultiAgentV2 协作请求 | 未验收、数据策略不允许明文或已知不兼容的端点 |
 
@@ -31,18 +31,16 @@ Portable 是协议兼容转换，不是解密。它只处理已经可读的 Code
 
 1. 新建或核对一个 `native` OpenAI 根 Provider，限制到明确的根模型。
 2. 分别为 DeepSeek 类与 GLM 类 Responses endpoint 建立 `portable` Provider，配置精确模型白名单或独立分组，避免验收请求被其他 Provider 接走。
-3. 记录每个 endpoint 是否真的支持 Responses WebSocket。未支持就是明确能力结论，不应伪装成支持。
-4. 保持系统总开关关闭，先完成普通 `/v1/responses` 连通性测试。
-5. 在隔离环境开启总开关，运行本文的真实 qualification。确认机器证据、usage log 和普通日志后再逐步放量。
+3. 保持系统总开关关闭，先完成普通 `/v1/responses` HTTP 与 SSE 连通性测试。
+4. 在隔离环境开启总开关，运行本文的真实 qualification。确认机器证据、usage log 和普通日志后再逐步放量。
 
-系统总开关关闭、Provider 为 `disabled`、客户端/协议不匹配、opaque content、名称冲突、恢复失败和传输能力不足都会 fail closed。Portable compatibility 错误不会自动切换 Provider、不会改走另一种协议、不会降级 MultiAgentV1，也不会携带任务正文重试到其他 Provider。
+系统总开关关闭、Provider 为 `disabled`、客户端/协议不匹配、opaque content、名称冲突、恢复失败和传输能力不足都会 fail closed。Portable compatibility 错误不会自动切换 Provider、不会改走另一种协议、不会降级 MultiAgentV1，也不会携带任务正文重试到其他 Provider。例外仅是 OpenAI native Responses WebSocket 原本已有的 WebSocket 到 HTTP 回退，它不是 portable Provider 的兜底路径。
 
-## 3. 传输、fake streaming 与 compaction
+## 3. HTTP/SSE、fake streaming 与 compaction
 
-HTTP non-stream、HTTP 上的 SSE 和 Responses WebSocket 是不同能力。验收记录中的 `actualTransport` 才是实际传输，不能用客户端请求的 `stream` 字段或 Provider 厂商名代替。
+Portable qualification 只覆盖 HTTP non-stream 与 HTTP 上的 SSE。GLM、DeepSeek portable Provider 不声明、不探测也不桥接 Responses WebSocket。OpenAI native Provider 的既有 Responses WebSocket 路径不属于 portable qualification，继续由独立的原生传输测试覆盖。验收记录中的 `actualTransport` 才是实际传输，不能用客户端请求的 `stream` 字段或 Provider 厂商名代替。
 
 - Portable V2 首版始终绕过 fake streaming，直接使用真实上游流。即使模型或 Provider 分组原本命中 fake streaming，也不会进入合成 emitter。
-- WebSocket 不支持或握手失败时，portable 请求返回 `compatibility_transport_unsupported`。不得静默回退 HTTP/SSE，也不得切换 Provider。
 - Remote compaction 的触发条件、轮次、摘要、usage 和缓存语义不变。内部摘要请求不经过 portable codec；压缩后的最终正常请求在发送到 portable Provider 前只转换一次。
 - Fake-stream bypass 和 compaction 隔离是产品语义，不是管理员可调的性能开关。
 
@@ -68,11 +66,9 @@ HTTP non-stream、HTTP 上的 SSE 和 Responses WebSocket 是不同能力。验�
 | `..._NATIVE_PROVIDER_ID` / `..._NATIVE_PROVIDER_NAME` / `..._NATIVE_MODEL` | 根 Agent 的实际 Provider 身份与模型 |
 | `..._DEEPSEEK_TYPE` / `..._DEEPSEEK_MODE` | 必须分别为 `codex` / `portable` |
 | `..._DEEPSEEK_PROVIDER_ID` / `..._PROVIDER_NAME` / `..._MODEL` | DeepSeek 类 endpoint 的实际身份与成功模型 |
-| `..._DEEPSEEK_WS_CAPABILITY` | `supported` 或 `unsupported`，必须来自 endpoint 实测/合同能力 |
 | `..._DEEPSEEK_UPSTREAM_ERROR_MODEL` | 运维方预置、仍路由到该 Provider 且确定返回上游错误的测试模型别名 |
 | `..._GLM_TYPE` / `..._GLM_MODE` | 必须分别为 `codex` / `portable` |
 | `..._GLM_PROVIDER_ID` / `..._PROVIDER_NAME` / `..._MODEL` | GLM 类 endpoint 的实际身份与成功模型 |
-| `..._GLM_WS_CAPABILITY` | `supported` 或 `unsupported` |
 | `..._GLM_UPSTREAM_ERROR_MODEL` | 运维方预置、仍路由到该 Provider 且确定返回上游错误的测试模型别名 |
 
 可选变量：`CCH_PORTABLE_QUALIFICATION_CODEX_BIN` 指定 Codex CLI；`CCH_PORTABLE_QUALIFICATION_CASE_TIMEOUT_MS` 调整单进程超时；`CCH_PORTABLE_QUALIFICATION_CANCEL_AFTER_MS` 调整观测到 `spawn_agent` 事件后再主动取消的延迟。故障模型必须是隔离环境里的显式配置，不能拿不存在的随意模型代替，否则只能证明路由失败，不能证明目标 Provider 的上游错误隔离。
@@ -88,9 +84,9 @@ Harness 会执行以下真实场景：
 - native OpenAI 根 Agent 分别委派 DeepSeek 类与 GLM 类 portable child。
 - 每类 Provider 都完成 `spawn_agent`、运行中的 `send_message`、完成后的 `followup_task`，且父 Agent 收到两轮结果。
 - 每类 Provider 都验证 `fork_turns=none`、最近一轮和 `all`，使用只存在于已完成父轮次的随机 marker 判断历史边界。
-- 每类 Provider 验证 SSE；WebSocket 声明支持时必须成功，不支持时必须得到稳定 capability error，且审计中没有 HTTP/SSE fallback 或 Provider switch。
+- 每类 Provider 验证 HTTP non-stream 与 SSE；不生成 portable WebSocket 用例。
 - 每类 Provider 验证主动取消、目标 child idle timeout、真实上游错误，随后立即在全新逻辑线程运行成功恢复用例，检查 session/response metadata 不串线。
-- 单独运行 native root control，确认没有 portable audit。
+- 单独运行 native root control，确认命中指定 native Provider；总开关开启时允许记录根工具 schema/命名空间准备产生的兼容审计，但不得出现 portable child 的 `agent_message_input` 转换。
 
 Harness 不会把原始 Codex JSONL、stderr、tool arguments 或上游 body 写成长期工件。为了恢复根会话并验证三种历史模式，Codex 必须在临时 `CODEX_HOME` 中保存 session；这个临时目录可能包含 prompt 明文，套件结束后会递归删除。应让系统临时目录位于加密、访问受控的磁盘，并在进程异常退出后检查和清理 `cch-portable-qualification-*` 残留目录。
 
@@ -104,10 +100,9 @@ Harness 不会把原始 Codex JSONL、stderr、tool arguments 或上游 body 写
 
 1. 所有 success case 的 usage log 都有 `response_restored` / `restored` 审计，requested/actual Provider、模型和 transport 与配置一致。
 2. 每个 child 的初始轮次和 follow-up 轮次都有独立关联 id；故障后的 recovery 不复用 fault session/response metadata。
-3. unsupported WebSocket 只出现 `compatibility_transport_unsupported`，actual transport 不是 HTTP/SSE，Provider 未改变。
-4. usage log API 返回值中不含任一任务/history/nonce sentinel；普通服务日志也要由运维侧按同一 sentinel 复核。
-5. native control 命中指定 native Provider，且不产生 portable special setting。
-6. 真实执行的 JSONL 证据与部署 commit、Codex version 对应；被跳过或缺凭证不能记为通过。
+3. usage log API 返回值中不含任一任务/history/nonce sentinel；普通服务日志也要由运维侧按同一 sentinel 复核。
+4. native control 命中指定 native Provider；若产生兼容 special setting，只能反映根工具 schema/命名空间准备，不得出现 `agent_message_input` 转换或切换到 portable Provider。
+5. 真实执行的 JSONL 证据与部署 commit、Codex version 对应；被跳过或缺凭证不能记为通过。
 
 当前仓库没有随附任何真实 endpoint、Provider 数据或凭证。没有安全配置的环境时，结论必须写成“未执行，缺少真实资格环境”，不能用 mock、示例 key 或本地 transport probe 冒充真实验收。
 
@@ -123,7 +118,6 @@ Harness 不会把原始 Codex JSONL、stderr、tool arguments 或上游 body 写
 | `compatibility_opaque_content` | Portable 输入仍含 CCH 无法读取的 opaque content | 改用 `native` endpoint，或停止在该 Provider 上使用 portable |
 | `compatibility_name_collision` | 请求工具名与 portable 保留名称冲突 | 检查请求工具声明；不要手工猜测或重写保留名称 |
 | `compatibility_restore_failed` | 上游响应缺失映射、名称无法唯一恢复，或返回结构与本次 request/turn metadata 不一致 | 按 response id 检查 endpoint 协议实现；确认没有并发串线 |
-| `compatibility_transport_unsupported` | endpoint 不支持所需 WS/传输或握手失败 | 把该 endpoint 能力标为 unsupported；客户端改用明确支持的传输，禁止静默 fallback |
 
 取消、超时和普通上游 4xx/5xx 还应核对下一条 recovery 记录。如果 recovery 的 session/response id 或 actual Provider 与 fault 记录相同，应视为 metadata 生命周期缺陷，不可继续放量。
 

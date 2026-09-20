@@ -14,6 +14,11 @@ import {
   runCodexProcess,
   writeCodexHome,
 } from "./portable-qualification-invocation";
+import {
+  type CodexLifecycleTrace,
+  discoverIsolatedChildThreadIds,
+  inspectIsolatedCodexLifecycle,
+} from "./portable-qualification-rollout";
 
 export type LifecycleOutput = {
   case_id: string;
@@ -29,6 +34,7 @@ export type LifecycleOutput = {
 export type LifecycleResult = {
   run: ParsedCodexRun;
   audits: PortableAudit[];
+  trace: CodexLifecycleTrace | null;
   sentinels: string[];
   lifecycle: LifecycleOutput | null;
   code: number | null;
@@ -76,19 +82,21 @@ function historyForkValue(mode: QualificationCase["historyMode"]): string {
   return "all";
 }
 
-function lifecyclePrompt(
+export function buildLifecyclePrompt(
   caseInfo: QualificationCase,
   target: QualificationProvider,
+  recentMarker: string,
   liveNonce: string,
   followupNonce: string
 ): string {
   return [
     `Qualification case ${caseInfo.caseId}.`,
+    `Current-turn inherited history marker: ${recentMarker}.`,
     `Spawn exactly one ${target.kind} role agent with agent_type=${target.kind} and fork_turns=${historyForkValue(caseInfo.historyMode)}.`,
-    "The spawn task must ask the child to report every inherited marker beginning PORTABLE_HISTORY_ without giving it any marker value.",
+    "The spawn task must ask the child to report every inherited marker beginning PORTABLE_HISTORY_ without giving it any marker value, then use its wait collaboration tool until the parent's live nonce arrives; it must not complete before acknowledging that nonce.",
     `Immediately after spawn_agent returns, while the child is still running, call send_message with this live nonce: ${liveNonce}. Do not wait first.`,
-    "Wait for that child to complete.",
-    `After it is completed, call followup_task with this follow-up nonce: ${followupNonce}, then wait for completion again.`,
+    "Wait for that child to complete only while its completion result has not already arrived.",
+    `After it is completed, call followup_task with this follow-up nonce: ${followupNonce}. If the follow-up completion result arrives before the next action, do not call wait_agent again; otherwise wait for it once.`,
     "Do not put any PORTABLE_HISTORY_ marker value into spawn_agent, send_message, or followup_task arguments.",
     "Return only the required JSON. Set the four lifecycle booleans from actions actually completed, copy markers actually reported by the child, and copy both nonces only if the child acknowledged them.",
   ].join("\n");
@@ -111,12 +119,7 @@ export async function executeLifecycle(
   if (caseInfo.transport === "http") {
     throw new Error("HTTP non-stream qualification uses its dedicated direct invocation.");
   }
-  const { home, schemaPath, workdir } = await writeCodexHome(
-    qualification,
-    target,
-    caseInfo.transport,
-    options
-  );
+  const { home, schemaPath, workdir } = await writeCodexHome(qualification, target, options);
   const oldMarker = randomMarker("HISTORY_OLD");
   const recentMarker = randomMarker("HISTORY_RECENT");
   const liveNonce = randomMarker("LIVE_NONCE");
@@ -137,10 +140,7 @@ export async function executeLifecycle(
 
   const second = await runCodexProcess(
     invocation,
-    [
-      ...resumeArgs(firstRun.threadId),
-      `Remember completed-turn marker ${recentMarker}. Reply ACK only.`,
-    ],
+    [...resumeArgs(firstRun.threadId), "Establish one more completed root turn. Reply ACK only."],
     home,
     qualification.caseTimeoutMs
   );
@@ -148,11 +148,12 @@ export async function executeLifecycle(
     throw new Error(`Qualification ${caseInfo.caseId} could not establish its recent root turn.`);
   }
 
+  const finalStartedAt = Date.now();
   const final = await runCodexProcess(
     invocation,
     [
       ...resumeArgs(firstRun.threadId, schemaPath),
-      lifecyclePrompt(caseInfo, target, liveNonce, followupNonce),
+      buildLifecyclePrompt(caseInfo, target, recentMarker, liveNonce, followupNonce),
     ],
     home,
     qualification.caseTimeoutMs,
@@ -160,17 +161,31 @@ export async function executeLifecycle(
   );
   const run = parseCodexJsonl(final.stdout);
   if (!run.threadId) run.threadId = firstRun.threadId;
+  const childThreadIds = discoverIsolatedChildThreadIds(home, run.threadId);
+  run.relatedThreadIds = [...new Set([...run.relatedThreadIds, ...childThreadIds])];
+  const trace =
+    caseInfo.expected === "success" && final.code === 0 && !final.cancelled && !final.timedOut
+      ? await inspectIsolatedCodexLifecycle({
+          home,
+          rootThreadId: run.threadId,
+          startedAt: finalStartedAt,
+          sentinels,
+          historyMode: caseInfo.historyMode,
+        })
+      : null;
   const audits = await inspectPortableAudits(
     qualification,
     run,
     target,
     options.targetModel ?? target.model,
     startedAt,
-    sentinels
+    sentinels,
+    caseInfo.expected === "success" ? 2 : 1
   );
   return {
     run,
     audits,
+    trace,
     sentinels,
     lifecycle: parseLifecycleOutput(run.finalMessage),
     code: final.code,

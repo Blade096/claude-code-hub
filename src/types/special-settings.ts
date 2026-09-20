@@ -26,7 +26,8 @@ export type SpecialSetting =
   | PricingResolutionSpecialSetting
   | CodexServiceTierResultSpecialSetting
   | ResponseInputRectifierSpecialSetting
-  | ThinkingSignatureModelDetectionSpecialSetting;
+  | ThinkingSignatureModelDetectionSpecialSetting
+  | CodexMultiAgentV2PortableSpecialSetting;
 
 export type SpecialSettingChangeValue = string | number | boolean | null;
 
@@ -336,6 +337,21 @@ export type ResponseInputRectifierSpecialSetting = {
   hit: boolean;
   action: "string_to_array" | "object_to_array" | "empty_string_to_empty_array" | "passthrough";
   originalType: "string" | "object" | "array" | "other";
+};
+
+/** Codex MultiAgentV2 portable request/response compatibility audit. */
+export type CodexMultiAgentV2PortableSpecialSetting = {
+  type: "codex_multi_agent_v2_portable";
+  scope: "request";
+  hit: true;
+  providerId: number;
+  requestedModel: string | null;
+  actualModel: string | null;
+  transformations: Array<
+    "spawn_agent_message_schema" | "collaboration_namespace" | "agent_message_input"
+  >;
+  responseRestore: "pending" | "restored" | "not_needed" | "failed";
+  errorCode: string | null;
 };
 
 /**

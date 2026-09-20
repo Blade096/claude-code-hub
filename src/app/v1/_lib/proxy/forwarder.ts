@@ -62,6 +62,10 @@ import { buildProxyUrl } from "../url";
 import { rectifyBillingHeader } from "./billing-header-rectifier";
 import { bindClientAbortListener } from "./client-abort-listener";
 import { deriveClientSafeUpstreamErrorMessage } from "./client-error-message";
+import {
+  isPortableCompatibilityError,
+  preparePortableCompatibilityRequest,
+} from "./codex-portable-compatibility";
 import { combineAbortSignals } from "./combine-abort-signals";
 import { isStandardProxyEndpointPath } from "./endpoint-family-catalog";
 import { resolveEndpointPolicy, shouldEnforceStrictEndpointPoolPolicy } from "./endpoint-policy";
@@ -1732,6 +1736,11 @@ export class ProxyForwarder {
         } catch (error) {
           lastError = error as Error;
 
+          session.clearPortableTransformationMetadata?.();
+          if (isPortableCompatibilityError(lastError)) {
+            throw lastError;
+          }
+
           // ⭐ 1. 分类错误（供应商错误 vs 系统错误 vs 客户端中断）
           // 使用异步版本确保错误规则已加载
           let errorCategory = await categorizeErrorAsync(lastError);
@@ -2377,6 +2386,10 @@ export class ProxyForwarder {
       throw new Error("Provider is required");
     }
 
+    // Every real upstream attempt owns a fresh mapping. A failed/retried attempt
+    // must never leave a mapping for the next Provider.
+    session.clearPortableTransformationMetadata?.();
+
     const resolvedCacheTtl = resolveCacheTtlPreference(
       session.authState?.key?.cacheTtlPreference,
       provider.cacheTtlPreference
@@ -2900,6 +2913,18 @@ export class ProxyForwarder {
             throw new ProxyError(validation.message ?? "Invalid request.", 400);
           }
 
+          const portablePreparation = await preparePortableCompatibilityRequest({
+            session,
+            provider,
+            request: messageToSend,
+          });
+          messageToSend = portablePreparation.request;
+          session.setPortableTransformationMetadata?.(portablePreparation.metadata);
+          if (portablePreparation.metadata) {
+            session.addSpecialSetting(portablePreparation.metadata.audit);
+            await persistSpecialSettings(session);
+          }
+
           const bodyString = JSON.stringify(messageToSend);
           requestBody = bodyString;
           session.forwardedRequestBody = bodyString;
@@ -2919,7 +2944,14 @@ export class ProxyForwarder {
               format: session.originalFormat,
               method: session.method,
               bodyLength: bodyString.length,
-              bodyPreview: bodyString.slice(0, 1000),
+              bodyPreview: portablePreparation.metadata ? undefined : bodyString.slice(0, 1000),
+              portableCompatibility: portablePreparation.metadata
+                ? {
+                    providerId: portablePreparation.metadata.providerId,
+                    transformations: portablePreparation.metadata.transformations,
+                    matchedPathCount: portablePreparation.metadata.matchedPaths.length,
+                  }
+                : undefined,
               isStreaming,
             });
           }
@@ -4249,6 +4281,15 @@ export class ProxyForwarder {
       if (settled || winnerCommitted || attempt.settled) return;
 
       lastError = error;
+
+      attempt.session.clearPortableTransformationMetadata?.();
+      if (isPortableCompatibilityError(error)) {
+        attempt.settled = true;
+        attempts.delete(attempt);
+        abortAllAttempts(attempt, "portable_compatibility_error");
+        await settleFailure(error);
+        return;
+      }
 
       let errorCategory = await categorizeErrorAsync(error);
       lastErrorCategory = errorCategory;

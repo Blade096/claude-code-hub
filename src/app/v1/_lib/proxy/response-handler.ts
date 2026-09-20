@@ -49,6 +49,7 @@ import { GeminiAdapter } from "../gemini/adapter";
 import type { GeminiResponse } from "../gemini/types";
 import { extractActualResponseModelForProvider } from "./actual-response-model";
 import { bindClientAbortListener } from "./client-abort-listener";
+import { restorePortableCompatibilityResponse } from "./codex-portable-compatibility";
 import { isClientAbortError, isTransportError } from "./errors";
 import type { ProxySession } from "./session";
 import {
@@ -1330,6 +1331,15 @@ export class ProxyResponseHandler {
           }
         );
         fixedResponse = response;
+      }
+    }
+
+    const portableMetadata = session.getPortableTransformationMetadata?.() ?? null;
+    if (portableMetadata) {
+      try {
+        fixedResponse = await restorePortableCompatibilityResponse(fixedResponse, portableMetadata);
+      } finally {
+        session.clearPortableTransformationMetadata?.();
       }
     }
 

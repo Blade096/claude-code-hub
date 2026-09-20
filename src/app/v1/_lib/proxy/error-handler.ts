@@ -12,6 +12,7 @@ import { sanitizeErrorTextForDetail } from "@/lib/utils/upstream-error-detection
 import { updateMessageRequestDetails, updateMessageRequestDuration } from "@/repository/message";
 import type { SystemSettings } from "@/types/system-config";
 import { deriveClientSafeUpstreamErrorMessage } from "./client-error-message";
+import { isPortableCompatibilityError } from "./codex-portable-compatibility";
 import { attachSessionIdToErrorResponse } from "./error-session-id";
 import {
   ALL_PROVIDERS_UNAVAILABLE_MESSAGE,
@@ -278,6 +279,24 @@ export class ProxyErrorHandler {
       );
       return finalResponse;
     };
+
+    if (isPortableCompatibilityError(error)) {
+      logger.error("ProxyErrorHandler: Portable compatibility request failed", {
+        compatibilityCode: error.compatibilityCode,
+        fieldPath: error.fieldPath,
+        providerId: error.providerId,
+        sessionId: session.sessionId,
+      });
+      return await finalizeErrorResponse(
+        ProxyResponses.buildError(
+          error.statusCode,
+          error.message,
+          error.errorType,
+          error.toSafeDetails()
+        ),
+        error.message
+      );
+    }
 
     // 检测是否有覆写配置（响应体或状态码）
     // 使用异步版本确保错误规则已加载

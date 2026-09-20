@@ -174,6 +174,16 @@ function buildSettingKey(setting: SpecialSetting): string {
         setting.extractedModel,
         setting.requestedModel,
       ]);
+    case "codex_multi_agent_v2_portable":
+      return JSON.stringify([
+        setting.type,
+        setting.providerId,
+        setting.requestedModel,
+        setting.actualModel,
+        setting.transformations,
+        setting.responseRestore,
+        setting.errorCode,
+      ]);
     default: {
       // 兜底：保证即使未来扩展类型也不会导致运行时崩溃
       const _exhaustive: never = setting;

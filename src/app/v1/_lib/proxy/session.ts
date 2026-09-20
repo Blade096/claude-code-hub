@@ -16,6 +16,7 @@ import type { Provider, ProviderType } from "@/types/provider";
 import type { SpecialSetting } from "@/types/special-settings";
 import type { BillingModelSource, CodexPriorityBillingSource } from "@/types/system-config";
 import type { User } from "@/types/user";
+import type { PortableTransformationMetadata } from "./codex-portable-compatibility";
 import { isCountTokensEndpointPath } from "./endpoint-paths";
 import {
   type EndpointPolicy,
@@ -124,6 +125,9 @@ export class ProxySession {
 
   // Actual serialized request body sent to upstream (after all preprocessing).
   forwardedRequestBody: string | null = null;
+
+  // Metadata owned by the currently successful Provider attempt only.
+  private portableTransformationMetadata: PortableTransformationMetadata | null = null;
 
   // Session ID（用于会话粘性和并发限流）
   sessionId: string | null;
@@ -462,6 +466,18 @@ export class ProxySession {
 
   getSpecialSettings(): SpecialSetting[] | null {
     return this.specialSettings.length > 0 ? this.specialSettings : null;
+  }
+
+  setPortableTransformationMetadata(metadata: PortableTransformationMetadata | null): void {
+    this.portableTransformationMetadata = metadata;
+  }
+
+  getPortableTransformationMetadata(): PortableTransformationMetadata | null {
+    return this.portableTransformationMetadata;
+  }
+
+  clearPortableTransformationMetadata(): void {
+    this.portableTransformationMetadata = null;
   }
 
   /**

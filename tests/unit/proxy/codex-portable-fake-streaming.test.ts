@@ -18,9 +18,11 @@ vi.mock("@/app/v1/_lib/proxy/forwarder", () => ({
 vi.mock("@/lib/logger", () => ({ logger: mocks.logger }));
 
 import { isPortableCodexMultiAgentV2Request } from "@/app/v1/_lib/proxy/codex-multi-agent-v2-gate";
+import { preparePortableCompatibilityRequest } from "@/app/v1/_lib/proxy/codex-portable-compatibility";
 import { tryFakeStreamingPath } from "@/app/v1/_lib/proxy/fake-streaming/proxy-integration";
 import type { ClientFormat } from "@/app/v1/_lib/proxy/format-mapper";
 import type { ProxySession } from "@/app/v1/_lib/proxy/session";
+import type { Provider } from "@/types/provider";
 import type { SystemSettings } from "@/types/system-config";
 
 function collaborationNamespace() {
@@ -61,6 +63,7 @@ function makeSession(options: {
     message.tools = [collaborationNamespace()];
   }
   const headers = new Headers({ "user-agent": "Codex Desktop/1.2.3" });
+  let fakeStreamingAttempt = false;
   return {
     originalFormat: options.format ?? "response",
     requestUrl: new URL(
@@ -85,6 +88,10 @@ function makeSession(options: {
         ? new AbortController().signal
         : options.clientAbortSignal,
     isInternalCompactionRequest: () => options.internalCompaction ?? false,
+    setFakeStreamingAttempt: (enabled: boolean) => {
+      fakeStreamingAttempt = enabled;
+    },
+    isFakeStreamingAttempt: () => fakeStreamingAttempt,
   } as unknown as ProxySession;
 }
 
@@ -146,6 +153,47 @@ describe("portable MultiAgentV2 fake-streaming bypass", () => {
     expect(session.request.message).toEqual(originalMessage);
     expect(session.requestUrl.toString()).toBe(originalUrl);
     expect(session.getPortableTransformationMetadata?.()).toBeUndefined();
+  });
+
+  test("fails closed if a native fake-stream attempt switches to a portable provider", async () => {
+    const session = makeSession({ mode: "native" }) as ProxySession & {
+      clearResponseTimeout: (() => void) | null;
+      releaseAgent: (() => void) | null;
+    };
+    const clearResponseTimeout = vi.fn();
+    const releaseAgent = vi.fn();
+    session.clearResponseTimeout = clearResponseTimeout;
+    session.releaseAgent = releaseAgent;
+
+    mocks.send.mockImplementationOnce(async (activeSession: ProxySession) => {
+      expect(activeSession.isFakeStreamingAttempt()).toBe(true);
+      const portableProvider = {
+        ...activeSession.provider,
+        id: 43,
+        name: "portable-fallback",
+        codexMultiAgentV2Mode: "portable",
+      } as Provider;
+      activeSession.provider = portableProvider;
+      await preparePortableCompatibilityRequest({
+        session: activeSession,
+        provider: portableProvider,
+        request: activeSession.request.message,
+      });
+      throw new Error("portable fake-stream attempt unexpectedly continued");
+    });
+
+    const response = await tryFakeStreamingPath(session, settings());
+    expect(response).not.toBeNull();
+    const body = await response!.text();
+
+    expect(body).toContain("codex_multi_agent_v2_provider_transport_unsupported");
+    expect(body).not.toContain("hello");
+    expect(session.isFakeStreamingAttempt()).toBe(false);
+    expect(session.getPortableTransformationMetadata?.()).toBeUndefined();
+    expect(clearResponseTimeout).toHaveBeenCalledOnce();
+    expect(releaseAgent).toHaveBeenCalledOnce();
+    expect(session.clearResponseTimeout).toBeNull();
+    expect(session.releaseAgent).toBeNull();
   });
 
   test.each([

@@ -154,8 +154,10 @@ function buildAttemptPerformer(session: ProxySession): AttemptPerformer {
     if (abortSignal.aborted) {
       throw Object.assign(new Error("aborted"), { name: "AbortError" });
     }
-    const response = await ProxyForwarder.send(session);
+    const previousFakeStreamingAttempt = session.isFakeStreamingAttempt?.() ?? false;
+    session.setFakeStreamingAttempt?.(true);
     try {
+      const response = await ProxyForwarder.send(session);
       const body = await response.text();
       return {
         status: response.status,
@@ -163,6 +165,7 @@ function buildAttemptPerformer(session: ProxySession): AttemptPerformer {
         providerId: session.provider?.id != null ? String(session.provider.id) : "unknown",
       };
     } finally {
+      session.setFakeStreamingAttempt?.(previousFakeStreamingAttempt);
       // ProxyForwarder.send hangs cleanup callbacks on the session that
       // ProxyResponseHandler.dispatch is normally responsible for invoking.
       // Since fake streaming consumes the response body itself, we must run

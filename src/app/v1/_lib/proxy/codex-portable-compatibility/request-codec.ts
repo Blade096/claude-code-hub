@@ -375,6 +375,17 @@ export async function preparePortableCompatibilityRequest({
     throw new PortableCompatibilityError("provider_disabled", { providerId: provider.id });
   }
 
+  // The fake-streaming runner consumes the upstream body without passing it
+  // through the shared portable response restorer. This can only occur when a
+  // native fake-stream attempt switches Provider after the read-only preflight.
+  // Refuse that portable attempt before request transformation or dispatch.
+  if (session.isFakeStreamingAttempt?.() === true) {
+    throw new PortableCompatibilityError("provider_transport_unsupported", {
+      fieldPath: "transport.fake_streaming",
+      providerId: provider.id,
+    });
+  }
+
   const settings = await getCachedSystemSettings();
   if (!settings.enableCodexMultiAgentV2Compatibility) {
     throw new PortableCompatibilityError("feature_disabled", { providerId: provider.id });

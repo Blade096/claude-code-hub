@@ -29,7 +29,7 @@ const ERROR_MESSAGES: Record<PortableCompatibilityErrorCode, string> = {
   response_identity_mismatch:
     "Codex MultiAgentV2 portable response changed a function-call identity.",
   provider_transport_unsupported:
-    "The selected provider does not support the required Responses WebSocket transport.",
+    "The selected provider does not support the required portable response transport.",
 };
 
 export class PortableCompatibilityError extends ProxyError {

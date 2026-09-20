@@ -122,7 +122,7 @@ function buildStreamResponse(input: FakeStreamingRunInput): Response {
                 family: input.family,
                 errorMessage:
                   error instanceof Error ? error.message : "fake streaming runner failed",
-                errorCode: "runner_error",
+                errorCode: safeRunnerErrorCode(error),
               })
             );
           }
@@ -165,7 +165,7 @@ export async function buildFakeStreamingNonStreamResponse(
     return new Response(
       JSON.stringify({
         error: {
-          code: "runner_error",
+          code: safeRunnerErrorCode(error),
           message: error instanceof Error ? error.message : "fake streaming runner failed",
         },
       }),
@@ -212,4 +212,11 @@ export async function buildFakeStreamingNonStreamResponse(
       headers: { "Content-Type": "application/json; charset=utf-8" },
     }
   );
+}
+
+function safeRunnerErrorCode(error: unknown): string {
+  const errorType = (error as { errorType?: unknown } | null)?.errorType;
+  return typeof errorType === "string" && errorType.startsWith("codex_multi_agent_v2_")
+    ? errorType
+    : "runner_error";
 }

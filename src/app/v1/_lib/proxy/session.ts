@@ -155,6 +155,11 @@ export class ProxySession {
   // that retry policy but must not be excluded from protocol classification.
   private internalCompactionRequest = false;
 
+  // True only while the fake-streaming runner owns an upstream attempt.
+  // Portable attempts cannot use the synthetic emitter because it bypasses
+  // the shared response-restoration pipeline.
+  private fakeStreamingAttempt = false;
+
   // 模型重定向追踪：保存原始模型名（重定向前）
   private originalModelName: string | null = null;
 
@@ -453,6 +458,14 @@ export class ProxySession {
 
   isInternalCompactionRequest(): boolean {
     return this.internalCompactionRequest;
+  }
+
+  setFakeStreamingAttempt(enabled: boolean): void {
+    this.fakeStreamingAttempt = enabled;
+  }
+
+  isFakeStreamingAttempt(): boolean {
+    return this.fakeStreamingAttempt;
   }
 
   isRawCrossProviderFallbackEnabled(): boolean {

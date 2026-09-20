@@ -23,6 +23,17 @@ export type PortableTransformation =
   | "collaboration_namespace"
   | "agent_message_input";
 
+export type PortableTransport = "http" | "sse" | "websocket";
+
+export type PortableCompatibilityErrorCategory =
+  | "compatibility_feature_disabled"
+  | "compatibility_provider_disabled"
+  | "compatibility_client_or_protocol_mismatch"
+  | "compatibility_opaque_content"
+  | "compatibility_name_collision"
+  | "compatibility_restore_failed"
+  | "compatibility_transport_unsupported";
+
 export type PortableTransformationMetadata = {
   version: 1;
   providerId: number;

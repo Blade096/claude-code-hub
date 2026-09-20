@@ -344,7 +344,14 @@ export type CodexMultiAgentV2PortableSpecialSetting = {
   type: "codex_multi_agent_v2_portable";
   scope: "request";
   hit: true;
-  providerId: number;
+  mode: "portable";
+  state: "request_transformed" | "upstream_sent" | "response_restored" | "failed";
+  requestedTransport: "http" | "sse" | "websocket";
+  actualTransport: "http" | "sse" | "websocket" | null;
+  requestedProviderId: number | null;
+  requestedProviderName: string | null;
+  actualProviderId: number | null;
+  actualProviderName: string | null;
   requestedModel: string | null;
   actualModel: string | null;
   transformations: Array<
@@ -354,8 +361,19 @@ export type CodexMultiAgentV2PortableSpecialSetting = {
     | "collaboration_namespace"
     | "agent_message_input"
   >;
-  responseRestore: "pending" | "restored" | "not_needed" | "failed";
-  errorCode: string | null;
+  responseRestore: "not_started" | "pending" | "restored" | "not_needed" | "failed";
+  errorCategory:
+    | "compatibility_feature_disabled"
+    | "compatibility_provider_disabled"
+    | "compatibility_client_or_protocol_mismatch"
+    | "compatibility_opaque_content"
+    | "compatibility_name_collision"
+    | "compatibility_restore_failed"
+    | "compatibility_transport_unsupported"
+    | null;
+  requestId: number | null;
+  sessionId: string | null;
+  responseId: string | null;
 };
 
 /**

@@ -1,4 +1,13 @@
 export {
+  capturePortableResponseId,
+  markPortableResponseFailed,
+  markPortableResponseStarted,
+  markPortableResponseSucceeded,
+  portableAuditCorrelation,
+  recordPortableFailureAudit,
+  requestedPortableTransport,
+} from "./audit";
+export {
   isPortableCompatibilityError,
   PortableCompatibilityError,
   type PortableCompatibilityErrorCode,
@@ -14,9 +23,11 @@ export {
   PORTABLE_COLLABORATION_ACTIONS,
   PORTABLE_COLLABORATION_NAMESPACE,
   type PortableCollaborationAction,
+  type PortableCompatibilityErrorCategory,
   type PortablePreparation,
   type PortableResponseRestoreState,
   type PortableToolIdentityMapping,
   type PortableTransformation,
   type PortableTransformationMetadata,
+  type PortableTransport,
 } from "./types";

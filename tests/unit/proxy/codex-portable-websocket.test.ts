@@ -616,10 +616,10 @@ describe("portable compatibility over Responses WebSocket", () => {
     const failedBody = await restoreTurnResponse(failedTurn, failed.response, failed.metadata);
 
     expect(failedBody).toContain('"type":"error"');
-    expect(failedBody).toContain("codex_multi_agent_v2_missing_mapping");
+    expect(failedBody).toContain("compatibility_restore_failed");
     expect(failedBody).not.toContain("Trigger an isolated response mapping error.");
     expect(failed.metadata.responseRestore).toBe("failed");
-    expect(failed.metadata.audit.errorCode).toBe("missing_mapping");
+    expect(failed.metadata.audit.errorCategory).toBe("compatibility_restore_failed");
     expect(failedTurn.session.getPortableTransformationMetadata()).toBeNull();
     expect(getResponsesWsSessionCountForTests()).toBe(0);
 

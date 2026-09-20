@@ -25,12 +25,22 @@ function metadata(
     type: "codex_multi_agent_v2_portable" as const,
     scope: "request" as const,
     hit: true as const,
-    providerId: 42,
+    mode: "portable" as const,
+    state: "request_transformed" as const,
+    requestedTransport: "http" as const,
+    actualTransport: null,
+    requestedProviderId: 42,
+    requestedProviderName: "fixture-provider",
+    actualProviderId: 42,
+    actualProviderName: "fixture-provider",
     requestedModel: "requested-model",
     actualModel: "actual-model",
     transformations: [...transformations],
     responseRestore: "pending" as const,
-    errorCode: null,
+    errorCategory: null,
+    requestId: 123,
+    sessionId: "session-fixture",
+    responseId: null,
   };
   return {
     version: 1,
@@ -268,7 +278,7 @@ describe("Codex MultiAgentV2 portable response codec", () => {
       )
     ).rejects.toMatchObject({ compatibilityCode: "malformed_response" });
     expect(nonJsonState.responseRestore).toBe("failed");
-    expect(nonJsonState.audit.errorCode).toBe("malformed_response");
+    expect(nonJsonState.audit.errorCategory).toBe("compatibility_restore_failed");
 
     await expect(
       restorePortableCompatibilityResponse(

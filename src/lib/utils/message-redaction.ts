@@ -20,6 +20,16 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function redactMessageContent(message: Record<string, unknown>): Record<string, unknown> {
   const result = { ...message };
 
+  if ("encrypted_content" in result) {
+    result.encrypted_content = REDACTED_MARKER;
+  }
+  if ("arguments" in result) {
+    result.arguments = REDACTED_MARKER;
+  }
+  if ("output" in result && result.type === "function_call_output") {
+    result.output = REDACTED_MARKER;
+  }
+
   // Redact string content
   if (typeof result.content === "string") {
     result.content = REDACTED_MARKER;
@@ -35,6 +45,10 @@ function redactMessageContent(message: Record<string, unknown>): Record<string, 
 
       if (isPlainObject(block)) {
         const redactedBlock = { ...block };
+
+        if ("encrypted_content" in redactedBlock) {
+          redactedBlock.encrypted_content = REDACTED_MARKER;
+        }
 
         // Redact text content in text blocks
         if ("text" in redactedBlock && typeof redactedBlock.text === "string") {
@@ -327,7 +341,7 @@ function redactCodexOutput(output: unknown[]): unknown[] {
 
     // Redact message content
     if (
-      itemType === "message" &&
+      (itemType === "message" || itemType === "agent_message") &&
       "content" in redactedItem &&
       Array.isArray(redactedItem.content)
     ) {
@@ -336,6 +350,9 @@ function redactCodexOutput(output: unknown[]): unknown[] {
         const redactedC = { ...c };
         if ("text" in redactedC && typeof redactedC.text === "string") {
           redactedC.text = REDACTED_MARKER;
+        }
+        if ("encrypted_content" in redactedC) {
+          redactedC.encrypted_content = REDACTED_MARKER;
         }
         return redactedC;
       });
@@ -358,8 +375,15 @@ function redactCodexOutput(output: unknown[]): unknown[] {
     }
 
     // Redact function_call arguments
-    if (itemType === "function_call" && "arguments" in redactedItem) {
+    if (
+      (itemType === "function_call" || itemType === "custom_tool_call") &&
+      "arguments" in redactedItem
+    ) {
       redactedItem.arguments = REDACTED_MARKER;
+    }
+
+    if ("encrypted_content" in redactedItem) {
+      redactedItem.encrypted_content = REDACTED_MARKER;
     }
 
     return redactedItem;
@@ -400,6 +424,28 @@ export function redactResponseBody(body: unknown): unknown {
 
   const result = { ...body };
 
+  if ("item" in result && isPlainObject(result.item)) {
+    result.item = redactCodexOutput([result.item])[0];
+  }
+
+  const eventType = typeof result.type === "string" ? result.type : "";
+  if (
+    (eventType.includes("output_text") ||
+      eventType.includes("reasoning") ||
+      eventType === "response.function_call_arguments.delta") &&
+    typeof result.delta === "string"
+  ) {
+    result.delta = REDACTED_MARKER;
+  }
+  if (eventType === "response.function_call_arguments.done" && "arguments" in result) {
+    result.arguments = REDACTED_MARKER;
+  }
+  if ("error" in result && isPlainObject(result.error)) {
+    const redactedError = { ...result.error };
+    if (typeof redactedError.message === "string") redactedError.message = REDACTED_MARKER;
+    result.error = redactedError;
+  }
+
   // Redact OpenAI choices[] (message.content or delta.content)
   if ("choices" in result && Array.isArray(result.choices)) {
     result.choices = redactOpenAIChoices(result.choices);
@@ -432,6 +478,74 @@ export function redactResponseBody(body: unknown): unknown {
   }
 
   return result;
+}
+
+function redactSseEvent(rawEvent: string): string {
+  const lineEnding = rawEvent.includes("\r\n") ? "\r\n" : "\n";
+  const lines = rawEvent.split(/\r?\n/);
+  const dataIndexes: number[] = [];
+  const dataValues: string[] = [];
+
+  lines.forEach((line, index) => {
+    if (!line.startsWith("data")) return;
+    const colon = line.indexOf(":");
+    const field = colon < 0 ? line : line.slice(0, colon);
+    if (field !== "data") return;
+    const rawValue = colon < 0 ? "" : line.slice(colon + 1);
+    dataIndexes.push(index);
+    dataValues.push(rawValue.startsWith(" ") ? rawValue.slice(1) : rawValue);
+  });
+
+  const redactMetadataLine = (line: string): string => {
+    if (!line) return line;
+    if (line.startsWith(":")) return ": [REDACTED]";
+    const colon = line.indexOf(":");
+    const field = colon < 0 ? line : line.slice(0, colon);
+    if (field === "event" || field === "id" || field === "retry" || field === "data") {
+      return line;
+    }
+    return colon < 0 ? REDACTED_MARKER : `${field}: ${REDACTED_MARKER}`;
+  };
+
+  if (dataIndexes.length === 0) return lines.map(redactMetadataLine).join(lineEnding);
+  const data = dataValues.join("\n");
+  const done = data === "[DONE]";
+
+  let redactedData = REDACTED_MARKER;
+  if (done) {
+    redactedData = "[DONE]";
+  } else {
+    try {
+      redactedData = JSON.stringify(redactResponseBody(JSON.parse(data) as unknown));
+    } catch {}
+  }
+
+  const firstDataIndex = dataIndexes[0];
+  const dataIndexSet = new Set(dataIndexes);
+  return lines
+    .map((line, index) => {
+      if (index === firstDataIndex) return `data: ${redactedData}`;
+      return dataIndexSet.has(index) ? null : redactMetadataLine(line);
+    })
+    .filter((line): line is string => line !== null)
+    .join(lineEnding);
+}
+
+/** Redact JSON and SSE response strings before default debug persistence. */
+export function redactResponseText(responseText: string): string {
+  try {
+    return JSON.stringify(redactResponseBody(JSON.parse(responseText) as unknown));
+  } catch {}
+
+  if (!/(^|\r?\n)(?:data|event|id|retry):/m.test(responseText)) {
+    return REDACTED_MARKER;
+  }
+
+  const separator = responseText.includes("\r\n") ? "\r\n\r\n" : "\n\n";
+  return responseText
+    .split(separator)
+    .map((event) => redactSseEvent(event))
+    .join(separator);
 }
 
 /**

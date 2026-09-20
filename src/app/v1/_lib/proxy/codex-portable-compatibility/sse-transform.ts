@@ -15,6 +15,11 @@ export type SseTransformHooks = {
   transformJson: (payload: unknown) => SseJsonTransformResult;
   onFailure: (error: unknown) => void;
   onFinalize: () => void;
+  safeError?: (error: unknown) => {
+    type: string;
+    message: string;
+    details?: Record<string, unknown>;
+  };
 };
 
 function splitLine(raw: string): SseLine {
@@ -75,18 +80,23 @@ function restoreEvent(lines: SseLine[], hooks: SseTransformHooks): string {
     .join("");
 }
 
-function safeErrorFrame(error: unknown): string {
+function safeErrorFrame(error: unknown, hooks: SseTransformHooks): string {
   const compatibilityError =
     error instanceof PortableCompatibilityError
       ? error
       : new PortableCompatibilityError("malformed_response");
+  const safe = hooks.safeError?.(compatibilityError) ?? {
+    type: compatibilityError.errorType,
+    message: compatibilityError.message,
+  };
   return [
     "event: error",
     `data: ${JSON.stringify({
       type: "error",
       error: {
-        type: compatibilityError.errorType,
-        message: compatibilityError.message,
+        type: safe.type,
+        message: safe.message,
+        ...(safe.details ? { details: safe.details } : {}),
       },
     })}`,
     "",
@@ -180,7 +190,7 @@ export function transformPortableSseResponse(
         if (!cancelled) {
           hooks.onFailure(error);
           try {
-            controller.enqueue(encoder.encode(safeErrorFrame(error)));
+            controller.enqueue(encoder.encode(safeErrorFrame(error, hooks)));
             closed = true;
             controller.close();
           } catch {

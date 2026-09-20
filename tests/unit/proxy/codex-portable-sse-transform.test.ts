@@ -31,12 +31,22 @@ function metadata(actions: CollaborationAction[] = ACTIONS): PortableTransformat
       type: "codex_multi_agent_v2_portable",
       scope: "request",
       hit: true,
-      providerId: 42,
+      mode: "portable",
+      state: "request_transformed",
+      requestedTransport: "sse",
+      actualTransport: null,
+      requestedProviderId: 42,
+      requestedProviderName: "fixture-provider",
+      actualProviderId: 42,
+      actualProviderName: "fixture-provider",
       requestedModel: "requested-model",
       actualModel: "actual-model",
       transformations,
       responseRestore: "pending",
-      errorCode: null,
+      errorCategory: null,
+      requestId: 123,
+      sessionId: "session-fixture",
+      responseId: null,
     },
   };
 }
@@ -267,11 +277,11 @@ describe("Codex portable SSE response transform", () => {
     );
     const text = await response.text();
 
-    expect(text).toContain("codex_multi_agent_v2_response_identity_mismatch");
+    expect(text).toContain("compatibility_restore_failed");
     expect(text).not.toContain(secret);
     expect(text).not.toContain("must-not-pass");
     expect(state.responseRestore).toBe("failed");
-    expect(state.audit.errorCode).toBe("response_identity_mismatch");
+    expect(state.audit.errorCategory).toBe("compatibility_restore_failed");
   });
 
   test("fails closed when delta identifiers cross two calls using the same tool", async () => {
@@ -310,7 +320,7 @@ describe("Codex portable SSE response transform", () => {
     );
     const text = await response.text();
 
-    expect(text).toContain("codex_multi_agent_v2_response_identity_mismatch");
+    expect(text).toContain("compatibility_restore_failed");
     expect(state.responseRestore).toBe("failed");
   });
 
@@ -322,7 +332,7 @@ describe("Codex portable SSE response transform", () => {
         state
       );
       const text = await response.text();
-      expect(text).toContain("codex_multi_agent_v2_malformed_response");
+      expect(text).toContain("compatibility_restore_failed");
       expect(state.responseRestore).toBe("failed");
     }
   });
@@ -388,7 +398,7 @@ describe("Codex portable SSE response transform", () => {
     });
     const text = await response.text();
 
-    expect(text).toContain("codex_multi_agent_v2_malformed_response");
+    expect(text).toContain("compatibility_restore_failed");
     expect(text).not.toContain(privateUpstreamDetail);
     expect(state.responseRestore).toBe("failed");
     expect(finalize).toHaveBeenCalledOnce();

@@ -2,6 +2,7 @@ import type { Context } from "hono";
 import { logger } from "@/lib/logger";
 import { writeLiveChain } from "@/lib/redis/live-chain-store";
 import { clientRequestsContext1m as clientRequestsContext1mHelper } from "@/lib/special-attributes";
+import { redactRequestBody } from "@/lib/utils/message-redaction";
 import {
   type ResolvedPricing,
   resolvePricingForModelRecords,
@@ -487,6 +488,18 @@ export class ProxySession {
   }
 
   addSpecialSetting(setting: SpecialSetting): void {
+    if (setting.type === "codex_multi_agent_v2_portable") {
+      const existing = this.specialSettings.find(
+        (candidate): candidate is typeof setting =>
+          candidate.type === setting.type &&
+          candidate.requestId === setting.requestId &&
+          candidate.sessionId === setting.sessionId
+      );
+      if (existing) {
+        Object.assign(existing, setting);
+        return;
+      }
+    }
     this.specialSettings.push(setting);
   }
 
@@ -1312,7 +1325,8 @@ async function parseRequestBody(c: Context): Promise<RequestBodyResult> {
   try {
     const parsedMessage = JSON.parse(requestBodyText) as Record<string, unknown>;
     requestMessage = parsedMessage; // 保留原始数据用于业务逻辑
-    requestBodyLog = JSON.stringify(optimizeRequestMessage(parsedMessage), null, 2); // 仅在日志中优化
+    const redactedMessage = redactRequestBody(parsedMessage) as Record<string, unknown>;
+    requestBodyLog = JSON.stringify(optimizeRequestMessage(redactedMessage), null, 2);
   } catch {
     requestMessage = { raw: requestBodyText };
     requestBodyLog = requestBodyText;

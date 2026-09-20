@@ -10,6 +10,7 @@ import {
   redactMessages,
   redactRequestBody,
   redactResponseBody,
+  redactResponseText,
 } from "@/lib/utils/message-redaction";
 import { normalizeRequestSequence } from "@/lib/utils/request-sequence";
 import type {
@@ -1564,14 +1565,7 @@ export class SessionManager {
         if (typeof response === "object") {
           responseString = JSON.stringify(redactResponseBody(response));
         } else {
-          // 字符串响应 - 尝试解析为 JSON
-          try {
-            const parsed = JSON.parse(response);
-            responseString = JSON.stringify(redactResponseBody(parsed));
-          } catch {
-            // 非 JSON（如 SSE 流），原样存储
-            responseString = response;
-          }
+          responseString = redactResponseText(response);
         }
       }
 
@@ -2154,13 +2148,7 @@ export class SessionManager {
 
           if (!SessionManager.STORE_MESSAGES) {
             if (typeof bodyToStore === "string") {
-              try {
-                bodyToStore = JSON.stringify(
-                  redactResponseBody(JSON.parse(bodyToStore) as unknown)
-                );
-              } catch {
-                bodyToStore = snapshot.body ?? null;
-              }
+              bodyToStore = redactResponseText(bodyToStore);
             } else if (bodyToStore !== null) {
               bodyToStore = JSON.stringify(redactResponseBody(bodyToStore));
             }

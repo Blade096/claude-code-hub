@@ -5,6 +5,7 @@ import {
   redactMessages,
   redactRequestBody,
   redactResponseBody,
+  redactResponseText,
 } from "@/lib/utils/message-redaction";
 
 describe("message-redaction", () => {
@@ -184,6 +185,26 @@ describe("message-redaction", () => {
       expect(result.model).toBe("claude-3-opus");
       expect(result.max_tokens).toBe(1024);
       expect(result.temperature).toBe(0.7);
+    });
+
+    test("redacts portable agent messages and encrypted content", () => {
+      const sentinel = "PORTABLE_TASK_SENTINEL_A91F";
+      const result = redactRequestBody({
+        input: [
+          {
+            type: "agent_message",
+            author: "/root",
+            recipient: "/root/worker",
+            content: [
+              { type: "input_text", text: sentinel },
+              { type: "encrypted_content", encrypted_content: sentinel },
+            ],
+          },
+        ],
+      });
+
+      expect(JSON.stringify(result)).not.toContain(sentinel);
+      expect(JSON.stringify(result)).toContain(REDACTED_MARKER);
     });
 
     test("should handle empty messages array", () => {
@@ -563,6 +584,35 @@ describe("message-redaction", () => {
 
     test("should handle empty response body", () => {
       expect(redactResponseBody({})).toEqual({});
+    });
+  });
+
+  describe("redactResponseText", () => {
+    test("redacts JSON SSE data while preserving framing fields and DONE", () => {
+      const sentinel = "PORTABLE_TASK_SENTINEL_SSE_72C4";
+      const input = [
+        `: ${sentinel}\r\n`,
+        "id: evt-1\r\n",
+        `x-provider-field: ${sentinel}\r\n`,
+        "event: response.output_item.done\r\n",
+        `data: ${JSON.stringify({ type: "response.output_item.done", item: { type: "function_call", arguments: sentinel } })}\r\n`,
+        "\r\n",
+        "data: [DONE]\r\n\r\n",
+      ].join("");
+
+      const result = redactResponseText(input);
+      expect(result).not.toContain(sentinel);
+      expect(result).toContain("id: evt-1");
+      expect(result).toContain("event: response.output_item.done");
+      expect(result).toContain("x-provider-field: [REDACTED]");
+      expect(result).toContain("data: [DONE]");
+    });
+
+    test("redacts non-JSON and multiline SSE data", () => {
+      const sentinel = "PORTABLE_TASK_SENTINEL_RAW_SSE_019D";
+      const result = redactResponseText(`data: ${sentinel}\ndata: second ${sentinel}\n\n`);
+      expect(result).not.toContain(sentinel);
+      expect(result).toContain(REDACTED_MARKER);
     });
   });
 

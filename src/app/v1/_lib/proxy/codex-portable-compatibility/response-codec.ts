@@ -1,3 +1,11 @@
+import { translateProxyError } from "../proxy-error-i18n";
+import {
+  capturePortableResponseId,
+  markPortableResponseFailed,
+  markPortableResponseStarted,
+  markPortableResponseSucceeded,
+  portableAuditCorrelation,
+} from "./audit";
 import { PortableCompatibilityError } from "./errors";
 import { isRecord } from "./guards";
 import { transformPortableSseResponse } from "./sse-transform";
@@ -341,6 +349,7 @@ export function restorePortableCompatibilityEventPayload(
     });
   }
   validateMappings(metadata);
+  capturePortableResponseId(metadata, payload);
 
   const restoredPayload = structuredClone(payload);
   const eventType = restoredPayload.type;
@@ -410,6 +419,7 @@ export function restorePortableCompatibilityPayload(
     });
   }
   validateMappings(metadata);
+  capturePortableResponseId(metadata, payload);
 
   const restoredPayload = structuredClone(payload);
   let restoredCount = 0;
@@ -438,8 +448,9 @@ export function restorePortableCompatibilityPayload(
 export async function restorePortableCompatibilityResponse(
   response: Response,
   metadata: PortableTransformationMetadata,
-  lifecycle: { onFinalize?: () => void } = {}
+  lifecycle: { onFinalize?: () => void; acceptLanguage?: string | null } = {}
 ): Promise<Response> {
+  markPortableResponseStarted(metadata, response);
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (contentType.includes("text/event-stream")) {
     const state = createPortableResponseRestoreState();
@@ -453,19 +464,38 @@ export async function restorePortableCompatibilityResponse(
       },
       onFailure(error) {
         failed = true;
-        metadata.responseRestore = "failed";
-        metadata.audit.responseRestore = "failed";
-        metadata.audit.errorCode =
+        const compatibilityError =
           error instanceof PortableCompatibilityError
-            ? error.compatibilityCode
-            : "malformed_response";
+            ? error
+            : new PortableCompatibilityError("malformed_response", {
+                providerId: metadata.providerId,
+              });
+        metadata.responseRestore = "failed";
+        markPortableResponseFailed(metadata, compatibilityError);
       },
       onFinalize() {
         if (!failed) {
           metadata.responseRestore = restoredCount > 0 ? "restored" : "not_needed";
           metadata.audit.responseRestore = metadata.responseRestore;
+          markPortableResponseSucceeded(metadata);
         }
         lifecycle.onFinalize?.();
+      },
+      safeError(error) {
+        const compatibilityError =
+          error instanceof PortableCompatibilityError
+            ? error
+            : new PortableCompatibilityError("malformed_response", {
+                providerId: metadata.providerId,
+              });
+        return {
+          type: compatibilityError.errorType,
+          message: translateProxyError(compatibilityError.category, lifecycle.acceptLanguage),
+          details: {
+            ...compatibilityError.toSafeDetails(),
+            ...portableAuditCorrelation(metadata.audit),
+          },
+        };
       },
     });
   }
@@ -491,6 +521,7 @@ export async function restorePortableCompatibilityResponse(
     const restored = restorePortableCompatibilityPayload(payload, metadata);
     metadata.responseRestore = restored.restoredCount > 0 ? "restored" : "not_needed";
     metadata.audit.responseRestore = metadata.responseRestore;
+    markPortableResponseSucceeded(metadata);
     const headers = new Headers(response.headers);
     headers.delete("content-length");
     return new Response(JSON.stringify(restored.payload), {
@@ -499,10 +530,14 @@ export async function restorePortableCompatibilityResponse(
       headers,
     });
   } catch (error) {
+    const compatibilityError =
+      error instanceof PortableCompatibilityError
+        ? error
+        : new PortableCompatibilityError("malformed_response", {
+            providerId: metadata.providerId,
+          });
     metadata.responseRestore = "failed";
-    metadata.audit.responseRestore = "failed";
-    metadata.audit.errorCode =
-      error instanceof PortableCompatibilityError ? error.compatibilityCode : "malformed_response";
+    markPortableResponseFailed(metadata, compatibilityError);
     throw error;
   } finally {
     lifecycle.onFinalize?.();

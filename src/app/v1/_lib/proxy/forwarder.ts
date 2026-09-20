@@ -30,6 +30,7 @@ import {
 import { getGlobalAgentPool, getProxyAgentForProvider } from "@/lib/proxy-agent";
 import { RateLimitService } from "@/lib/rate-limit/service";
 import { SessionManager } from "@/lib/session-manager";
+import { redactJsonString } from "@/lib/utils/message-redaction";
 import {
   detectUpstreamErrorFromSseOrJsonText,
   inferUpstreamErrorStatusCodeFromText,
@@ -2946,7 +2947,7 @@ export class ProxyForwarder {
               format: session.originalFormat,
               method: session.method,
               bodyLength: bodyString.length,
-              bodyPreview: portablePreparation.metadata ? undefined : bodyString.slice(0, 1000),
+              bodyPreview: redactJsonString(bodyString).slice(0, 1000),
               portableCompatibility: portablePreparation.metadata
                 ? {
                     providerId: portablePreparation.metadata.providerId,

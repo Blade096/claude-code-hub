@@ -8,11 +8,16 @@ import {
 import { emitProxyLangfuseTrace } from "@/lib/langfuse/emit-proxy-trace";
 import { logger } from "@/lib/logger";
 import { ProxyStatusTracker } from "@/lib/proxy-status-tracker";
+import { SessionManager } from "@/lib/session-manager";
 import { sanitizeErrorTextForDetail } from "@/lib/utils/upstream-error-detection";
 import { updateMessageRequestDetails, updateMessageRequestDuration } from "@/repository/message";
 import type { SystemSettings } from "@/types/system-config";
 import { deriveClientSafeUpstreamErrorMessage } from "./client-error-message";
-import { isPortableCompatibilityError } from "./codex-portable-compatibility";
+import {
+  isPortableCompatibilityError,
+  portableAuditCorrelation,
+  recordPortableFailureAudit,
+} from "./codex-portable-compatibility";
 import { attachSessionIdToErrorResponse } from "./error-session-id";
 import {
   ALL_PROVIDERS_UNAVAILABLE_MESSAGE,
@@ -22,6 +27,7 @@ import {
   ProxyError,
   type RateLimitError,
 } from "./errors";
+import { translateProxyError } from "./proxy-error-i18n";
 import { ProxyResponses } from "./responses";
 import type { ProxySession } from "./session";
 
@@ -281,19 +287,22 @@ export class ProxyErrorHandler {
     };
 
     if (isPortableCompatibilityError(error)) {
+      const audit = recordPortableFailureAudit(session, error);
+      const localizedMessage = translateProxyError(
+        error.category,
+        session.headers.get("accept-language")
+      );
       logger.error("ProxyErrorHandler: Portable compatibility request failed", {
-        compatibilityCode: error.compatibilityCode,
+        errorCategory: error.category,
         fieldPath: error.fieldPath,
         providerId: error.providerId,
-        sessionId: session.sessionId,
+        ...portableAuditCorrelation(audit),
       });
       return await finalizeErrorResponse(
-        ProxyResponses.buildError(
-          error.statusCode,
-          error.message,
-          error.errorType,
-          error.toSafeDetails()
-        ),
+        ProxyResponses.buildError(error.statusCode, localizedMessage, error.errorType, {
+          ...error.toSafeDetails(),
+          ...portableAuditCorrelation(audit),
+        }),
         error.message
       );
     }
@@ -637,6 +646,19 @@ export class ProxyErrorHandler {
     statusCode: number,
     rateLimitMetadata: Record<string, unknown> | null
   ): Promise<void> {
+    const specialSettings = session.getSpecialSettings?.() ?? null;
+    if (
+      session.sessionId &&
+      specialSettings &&
+      session.shouldPersistSessionDebugArtifacts?.() !== false
+    ) {
+      await SessionManager.storeSessionSpecialSettings(
+        session.sessionId,
+        specialSettings,
+        session.requestSequence
+      );
+    }
+
     if (!session.messageContext) {
       return;
     }
@@ -659,6 +681,7 @@ export class ProxyErrorHandler {
       providerId: session.provider?.id, // ⭐ 更新最终供应商ID（重试切换后）
       context1mApplied: session.getContext1mApplied(),
       swapCacheTtlApplied: session.provider?.swapCacheTtlBilling ?? false,
+      specialSettings: specialSettings ?? undefined,
     });
 
     // 记录请求结束

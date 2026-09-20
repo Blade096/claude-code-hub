@@ -12,6 +12,8 @@ export default createCoverageConfig({
     "tests/unit/proxy/codex-portable-sse-transform.test.ts",
     "tests/unit/proxy/codex-portable-websocket.test.ts",
     "tests/unit/proxy/remote-compaction-synthesizer.test.ts",
+    "tests/unit/proxy/portable-audit.test.ts",
+    "tests/unit/proxy/portable-errors.test.ts",
   ],
   sourceFiles: [
     "src/app/v1/_lib/proxy/codex-multi-agent-v2-gate.ts",

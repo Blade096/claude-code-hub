@@ -1338,6 +1338,7 @@ export class ProxyResponseHandler {
     if (portableMetadata) {
       fixedResponse = await restorePortableCompatibilityResponse(fixedResponse, portableMetadata, {
         onFinalize: () => session.clearPortableTransformationMetadata?.(),
+        acceptLanguage: session.headers.get("accept-language"),
       });
     }
 

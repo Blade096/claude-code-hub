@@ -1,4 +1,6 @@
 import { ProxyError } from "../errors";
+import { translateProxyError } from "../proxy-error-i18n";
+import type { PortableCompatibilityErrorCategory } from "./types";
 
 export type PortableCompatibilityErrorCode =
   | "feature_disabled"
@@ -14,26 +16,25 @@ export type PortableCompatibilityErrorCode =
   | "response_identity_mismatch"
   | "provider_transport_unsupported";
 
-const ERROR_MESSAGES: Record<PortableCompatibilityErrorCode, string> = {
-  feature_disabled: "Codex MultiAgentV2 portable compatibility is not enabled.",
-  provider_disabled: "The selected provider has disabled Codex MultiAgentV2 requests.",
-  client_or_protocol_mismatch:
-    "The request is not supported by Codex MultiAgentV2 portable compatibility.",
-  opaque_content: "Codex MultiAgentV2 portable input contains unreadable opaque content.",
-  name_collision: "Codex MultiAgentV2 portable tool names are ambiguous.",
-  unknown_tool: "Codex MultiAgentV2 portable response contains an unknown tool.",
-  missing_mapping: "Codex MultiAgentV2 portable response has no request-local tool mapping.",
-  duplicate_mapping: "Codex MultiAgentV2 portable response has duplicate tool mappings.",
-  ambiguous_mapping: "Codex MultiAgentV2 portable response tool identity is ambiguous.",
-  malformed_response: "Codex MultiAgentV2 portable response is malformed.",
-  response_identity_mismatch:
-    "Codex MultiAgentV2 portable response changed a function-call identity.",
-  provider_transport_unsupported:
-    "The selected provider does not support the required portable response transport.",
-};
+const ERROR_CATEGORIES: Record<PortableCompatibilityErrorCode, PortableCompatibilityErrorCategory> =
+  {
+    feature_disabled: "compatibility_feature_disabled",
+    provider_disabled: "compatibility_provider_disabled",
+    client_or_protocol_mismatch: "compatibility_client_or_protocol_mismatch",
+    opaque_content: "compatibility_opaque_content",
+    name_collision: "compatibility_name_collision",
+    unknown_tool: "compatibility_restore_failed",
+    missing_mapping: "compatibility_restore_failed",
+    duplicate_mapping: "compatibility_restore_failed",
+    ambiguous_mapping: "compatibility_restore_failed",
+    malformed_response: "compatibility_restore_failed",
+    response_identity_mismatch: "compatibility_restore_failed",
+    provider_transport_unsupported: "compatibility_transport_unsupported",
+  };
 
 export class PortableCompatibilityError extends ProxyError {
   readonly compatibilityCode: PortableCompatibilityErrorCode;
+  readonly category: PortableCompatibilityErrorCategory;
   readonly fieldPath: string | null;
   readonly providerId: number | null;
 
@@ -41,20 +42,23 @@ export class PortableCompatibilityError extends ProxyError {
     code: PortableCompatibilityErrorCode,
     options: { fieldPath?: string; providerId?: number } = {}
   ) {
-    super(ERROR_MESSAGES[code], 400);
+    const category = ERROR_CATEGORIES[code];
+    super(translateProxyError(category, "en"), 400);
     this.name = "PortableCompatibilityError";
     this.compatibilityCode = code;
+    this.category = category;
     this.fieldPath = options.fieldPath ?? null;
     this.providerId = options.providerId ?? null;
   }
 
   get errorType(): string {
-    return `codex_multi_agent_v2_${this.compatibilityCode}`;
+    return this.category;
   }
 
   toSafeDetails(): Record<string, unknown> {
     return {
       compatibilityCode: this.compatibilityCode,
+      errorCategory: this.category,
       fieldPath: this.fieldPath,
       providerId: this.providerId,
     };

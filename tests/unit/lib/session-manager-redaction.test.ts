@@ -204,15 +204,27 @@ describe("SessionManager - Redaction based on STORE_SESSION_MESSAGES", () => {
       expect(stored.content[0].text).toBe("Visible response text");
     });
 
-    it("should store non-JSON response as-is when STORE_SESSION_MESSAGES=false", async () => {
+    it("should redact non-JSON SSE response when STORE_SESSION_MESSAGES=false", async () => {
       mockStoreMessages = false;
       const nonJsonResponse = "data: event stream chunk";
 
       await SessionManager.storeSessionResponse("sess_stream", nonJsonResponse, 1);
 
       const [, , value] = redisMock.setex.mock.calls[0];
-      // Non-JSON should be stored as-is (cannot redact)
-      expect(value).toBe(nonJsonResponse);
+      expect(value).toBe("data: [REDACTED]");
+    });
+
+    it("removes portable sentinels from default SSE storage but preserves explicit full payload mode", async () => {
+      const sentinel = "PORTABLE_TASK_SENTINEL_REDIS_3B18";
+      const response = `event: response.function_call_arguments.delta\ndata: ${sentinel}\n\n`;
+
+      await SessionManager.storeSessionResponse("sess_safe", response, 1);
+      expect(redisMock.setex.mock.calls[0][2]).not.toContain(sentinel);
+
+      vi.clearAllMocks();
+      mockStoreMessages = true;
+      await SessionManager.storeSessionResponse("sess_full", response, 1);
+      expect(redisMock.setex.mock.calls[0][2]).toContain(sentinel);
     });
 
     it("should handle OpenAI choices format when STORE_SESSION_MESSAGES=false", async () => {

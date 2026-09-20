@@ -532,7 +532,13 @@ describe("portable compatibility proxy seams", () => {
       return {
         response: new Response(
           events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
-          { status: 200, headers: { "content-type": "text/event-stream" } }
+          {
+            status: 200,
+            headers: {
+              "content-type": "text/event-stream",
+              "x-cch-upstream-transport": "websocket",
+            },
+          }
         ),
         connected: true,
         reused: false,
@@ -570,7 +576,7 @@ describe("portable compatibility proxy seams", () => {
     expect(session.getSpecialSettings()).toContainEqual(
       expect.objectContaining({
         type: "codex_multi_agent_v2_portable",
-        providerId: provider.id,
+        actualProviderId: provider.id,
         responseRestore: "restored",
       })
     );
@@ -766,7 +772,7 @@ describe("portable compatibility proxy seams", () => {
   test("portable websocket capability failures neither fall back to HTTP nor switch Provider", async () => {
     const provider = makeProvider();
     const session = makeSession(provider);
-    mocks.isWebsocketClientRequest.mockReturnValueOnce(true);
+    mocks.isWebsocketClientRequest.mockReturnValue(true);
     mocks.evaluateResponsesWsEligibility.mockResolvedValueOnce({
       isWebsocketClient: true,
       eligible: true,
@@ -795,7 +801,7 @@ describe("portable compatibility proxy seams", () => {
   test("portable websocket ineligibility fails closed before an upstream attempt", async () => {
     const provider = makeProvider();
     const session = makeSession(provider);
-    mocks.isWebsocketClientRequest.mockReturnValueOnce(true);
+    mocks.isWebsocketClientRequest.mockReturnValue(true);
     mocks.evaluateResponsesWsEligibility.mockResolvedValueOnce({
       isWebsocketClient: true,
       eligible: false,
@@ -819,7 +825,7 @@ describe("portable compatibility proxy seams", () => {
   test("portable websocket eligibility exceptions fail closed", async () => {
     const provider = makeProvider();
     const session = makeSession(provider);
-    mocks.isWebsocketClientRequest.mockReturnValueOnce(true);
+    mocks.isWebsocketClientRequest.mockReturnValue(true);
     mocks.evaluateResponsesWsEligibility.mockRejectedValueOnce(
       new Error("websocket eligibility lookup failed")
     );

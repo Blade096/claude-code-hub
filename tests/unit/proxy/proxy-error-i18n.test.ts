@@ -6,6 +6,16 @@ import {
 } from "@/app/v1/_lib/proxy/proxy-error-i18n";
 
 describe("proxy error i18n boundary", () => {
+  const compatibilityCodes = [
+    "compatibility_feature_disabled",
+    "compatibility_provider_disabled",
+    "compatibility_client_or_protocol_mismatch",
+    "compatibility_opaque_content",
+    "compatibility_name_collision",
+    "compatibility_restore_failed",
+    "compatibility_transport_unsupported",
+  ] as const;
+
   it("covers all five supported locales", () => {
     expect(getSupportedProxyErrorLocales()).toEqual(["zh-CN", "zh-TW", "en", "ja", "ru"]);
 
@@ -49,7 +59,18 @@ describe("proxy error i18n boundary", () => {
 
   it("keeps the error code table closed", () => {
     // 错误码类型只允许登记过的码，新增文案必须一起登记，不会静默回退到别的错误
-    const codes: string[] = ["remote_compaction_failed"];
+    const codes: string[] = ["remote_compaction_failed", ...compatibilityCodes];
     expect(codes.every((code) => translateProxyError(code as never, "en").length > 0)).toBe(true);
+  });
+
+  it("localizes every stable compatibility error in all five languages without interpolation", () => {
+    for (const code of compatibilityCodes) {
+      const messages = getSupportedProxyErrorLocales().map((locale) =>
+        translateProxyError(code, locale)
+      );
+      expect(messages.every((message) => message.length > 0)).toBe(true);
+      expect(new Set(messages).size).toBe(5);
+      expect(messages.join(" ")).not.toContain("PORTABLE_TASK_SENTINEL");
+    }
   });
 });

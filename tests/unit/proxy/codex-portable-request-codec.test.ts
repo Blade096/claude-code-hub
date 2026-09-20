@@ -469,7 +469,7 @@ describe("Codex MultiAgentV2 portable request codec", () => {
       })
     ).rejects.toMatchObject({
       compatibilityCode: "provider_disabled",
-      errorType: "codex_multi_agent_v2_provider_disabled",
+      errorType: "compatibility_provider_disabled",
     });
     expect(mocks.getCachedSystemSettings).not.toHaveBeenCalled();
 

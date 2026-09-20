@@ -3,6 +3,7 @@ import { getCachedSystemSettings } from "@/lib/config";
 import type { Provider } from "@/types/provider";
 import { isCodexMultiAgentV2Request } from "../codex-multi-agent-v2-gate";
 import type { ProxySession } from "../session";
+import { createPortableCompatibilityAudit } from "./audit";
 import { PortableCompatibilityError } from "./errors";
 import { isRecord } from "./guards";
 import {
@@ -314,17 +315,7 @@ function createTransformationMetadata(
   const transformations = [...toolResult.transformations];
   if (inputPaths.length > 0) transformations.push("agent_message_input");
   const actualModel = resolveActualModel(session);
-  const audit = {
-    type: "codex_multi_agent_v2_portable" as const,
-    scope: "request" as const,
-    hit: true as const,
-    providerId: provider.id,
-    requestedModel: session.request.model,
-    actualModel,
-    transformations: [...transformations],
-    responseRestore: "pending" as const,
-    errorCode: null,
-  };
+  const audit = createPortableCompatibilityAudit({ session, provider, transformations });
   return {
     version: 1,
     providerId: provider.id,

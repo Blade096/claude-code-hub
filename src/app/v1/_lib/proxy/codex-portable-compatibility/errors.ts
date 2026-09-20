@@ -11,7 +11,8 @@ export type PortableCompatibilityErrorCode =
   | "duplicate_mapping"
   | "ambiguous_mapping"
   | "malformed_response"
-  | "response_identity_mismatch";
+  | "response_identity_mismatch"
+  | "provider_transport_unsupported";
 
 const ERROR_MESSAGES: Record<PortableCompatibilityErrorCode, string> = {
   feature_disabled: "Codex MultiAgentV2 portable compatibility is not enabled.",
@@ -27,6 +28,8 @@ const ERROR_MESSAGES: Record<PortableCompatibilityErrorCode, string> = {
   malformed_response: "Codex MultiAgentV2 portable response is malformed.",
   response_identity_mismatch:
     "Codex MultiAgentV2 portable response changed a function-call identity.",
+  provider_transport_unsupported:
+    "The selected provider does not support the required Responses WebSocket transport.",
 };
 
 export class PortableCompatibilityError extends ProxyError {

@@ -54,6 +54,7 @@ import { HeaderProcessor, resolveAnthropicAuthHeaders } from "../headers";
 import {
   evaluateResponsesWsEligibility,
   getResponsesWsSessionId,
+  isWebsocketClientRequest,
 } from "../responses-ws/eligibility";
 import { RESERVED_INTERNAL_HEADERS } from "../responses-ws/internal-secret";
 import { markResponsesWsUnsupported } from "../responses-ws/unsupported-cache";
@@ -64,6 +65,7 @@ import { bindClientAbortListener } from "./client-abort-listener";
 import { deriveClientSafeUpstreamErrorMessage } from "./client-error-message";
 import {
   isPortableCompatibilityError,
+  PortableCompatibilityError,
   preparePortableCompatibilityRequest,
 } from "./codex-portable-compatibility";
 import { combineAbortSignals } from "./combine-abort-signals";
@@ -3111,14 +3113,16 @@ export class ProxyForwarder {
       // 若握手失败或首帧前关闭，降级到下面的 HTTP 路径；不计入熔断器。
       let responsesWsResponse: Response | null = null;
       const responsesWsEndpointId = endpointAudit?.endpointId ?? null;
+      const portableWebsocketRequired = Boolean(
+        isWebsocketClientRequest(session.headers) && session.getPortableTransformationMetadata?.()
+      );
       try {
         const wsEligibility = await evaluateResponsesWsEligibility({
           headers: session.headers,
           provider,
           endpointId: responsesWsEndpointId,
         });
-
-        if (canUseTransportFallback && wsEligibility.eligible) {
+        if ((canUseTransportFallback || portableWebsocketRequired) && wsEligibility.eligible) {
           // Use the *final* outgoing body so the WS frame matches the HTTP
           // path: it has been through filterPrivateParameters() and any
           // request-filter transformations. Falling back to
@@ -3178,7 +3182,18 @@ export class ProxyForwarder {
                 errorMessage: wsResult.message,
                 attemptNumber: undefined,
               });
+              if (portableWebsocketRequired) {
+                throw new PortableCompatibilityError("provider_transport_unsupported", {
+                  fieldPath: "responses.websocket",
+                  providerId: provider.id,
+                });
+              }
             }
+          } else if (portableWebsocketRequired) {
+            throw new PortableCompatibilityError("provider_transport_unsupported", {
+              fieldPath: "responses.websocket.body",
+              providerId: provider.id,
+            });
           }
         } else if (wsEligibility.isWebsocketClient && wsEligibility.downgradeReason) {
           session.addProviderToChain(provider, {
@@ -3188,8 +3203,23 @@ export class ProxyForwarder {
             errorMessage: wsEligibility.downgradeReason,
             attemptNumber: undefined,
           });
+          if (portableWebsocketRequired) {
+            throw new PortableCompatibilityError("provider_transport_unsupported", {
+              fieldPath: "responses.websocket.eligibility",
+              providerId: provider.id,
+            });
+          }
         }
       } catch (wsError) {
+        if (isPortableCompatibilityError(wsError)) {
+          throw wsError;
+        }
+        if (portableWebsocketRequired) {
+          throw new PortableCompatibilityError("provider_transport_unsupported", {
+            fieldPath: "responses.websocket",
+            providerId: provider.id,
+          });
+        }
         logger.warn(
           "ProxyForwarder: Upstream Responses WebSocket attempt threw, falling back to HTTP",
           {
@@ -3242,6 +3272,14 @@ export class ProxyForwarder {
       const releaseDispatcherId = proxyConfig?.dispatcherId ?? directConnectionDispatcherId;
       if (releaseKey && releaseDispatcherId) {
         getGlobalAgentPool().releaseAgent(releaseKey, releaseDispatcherId);
+      }
+
+      // Portable compatibility failures are local protocol/capability errors.
+      // They must bypass every transport retry in this attempt as well as the
+      // outer Provider retry/switch loop.
+      if (isPortableCompatibilityError(fetchError)) {
+        cleanupCombinedSignal();
+        throw fetchError;
       }
 
       // 捕获 fetch 原始错误（网络错误、DNS 解析失败、连接失败等）

@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/app/v1/_lib/responses-ws/eligibility", () => ({
   evaluateResponsesWsEligibility: mocks.wsEligible,
   getResponsesWsSessionId: vi.fn(() => "ws-session"),
+  isWebsocketClientRequest: vi.fn(() => false),
 }));
 
 vi.mock("@/app/v1/_lib/responses-ws/upstream-adapter", () => ({

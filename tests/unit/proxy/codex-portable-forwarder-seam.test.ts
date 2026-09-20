@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
     isWebsocketClient: false,
     eligible: false,
   })),
+  isWebsocketClientRequest: vi.fn(() => false),
   tryResponsesWebsocketUpstream: vi.fn(),
   logger: {
     debug: vi.fn(),
@@ -63,6 +64,7 @@ vi.mock("@/app/v1/_lib/responses-ws/eligibility", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/app/v1/_lib/responses-ws/eligibility")>()),
   evaluateResponsesWsEligibility: mocks.evaluateResponsesWsEligibility,
   getResponsesWsSessionId: vi.fn(() => null),
+  isWebsocketClientRequest: mocks.isWebsocketClientRequest,
 }));
 
 vi.mock("@/app/v1/_lib/responses-ws/upstream-adapter", async (importOriginal) => ({
@@ -206,6 +208,14 @@ function bodyText(body: BodyInit | null | undefined): string {
 describe("portable compatibility proxy seams", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.evaluateResponsesWsEligibility.mockReset();
+    mocks.evaluateResponsesWsEligibility.mockResolvedValue({
+      isWebsocketClient: false,
+      eligible: false,
+    });
+    mocks.isWebsocketClientRequest.mockReset();
+    mocks.isWebsocketClientRequest.mockReturnValue(false);
+    mocks.tryResponsesWebsocketUpstream.mockReset();
     mocks.getCachedSystemSettings.mockResolvedValue({
       enableCodexMultiAgentV2Compatibility: true,
       enableClaudeMetadataUserIdInjection: false,
@@ -516,5 +526,120 @@ describe("portable compatibility proxy seams", () => {
     expect(fetch).not.toHaveBeenCalled();
     expect(selectAlternative).not.toHaveBeenCalled();
     expect(session.getPortableTransformationMetadata()).toBeNull();
+  });
+
+  test("portable websocket capability failures neither fall back to HTTP nor switch Provider", async () => {
+    const provider = makeProvider();
+    const session = makeSession(provider);
+    mocks.isWebsocketClientRequest.mockReturnValueOnce(true);
+    mocks.evaluateResponsesWsEligibility.mockResolvedValueOnce({
+      isWebsocketClient: true,
+      eligible: true,
+    });
+    mocks.tryResponsesWebsocketUpstream.mockResolvedValueOnce({
+      failed: true,
+      reason: "ws_upgrade_rejected",
+      message: "HTTP 426 Upgrade Required",
+      cacheableAsUnsupported: true,
+    });
+    const fetch = vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode");
+    const selectAlternative = vi.spyOn(ProxyForwarder as never, "selectAlternative");
+
+    await expect(ProxyForwarder.send(session)).rejects.toMatchObject({
+      compatibilityCode: "provider_transport_unsupported",
+      fieldPath: "responses.websocket",
+      providerId: provider.id,
+    });
+
+    expect(mocks.tryResponsesWebsocketUpstream).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(selectAlternative).not.toHaveBeenCalled();
+    expect(session.getPortableTransformationMetadata()).toBeNull();
+  });
+
+  test("portable websocket ineligibility fails closed before an upstream attempt", async () => {
+    const provider = makeProvider();
+    const session = makeSession(provider);
+    mocks.isWebsocketClientRequest.mockReturnValueOnce(true);
+    mocks.evaluateResponsesWsEligibility.mockResolvedValueOnce({
+      isWebsocketClient: true,
+      eligible: false,
+      downgradeReason: "endpoint_ws_unsupported_cached",
+      endpointId: 7,
+    });
+    const fetch = vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode");
+
+    const { doForward } = ProxyForwarder as unknown as {
+      doForward: (session: ProxySession, provider: Provider, baseUrl: string) => Promise<Response>;
+    };
+
+    await expect(doForward(session, provider, provider.url)).rejects.toMatchObject({
+      compatibilityCode: "provider_transport_unsupported",
+      fieldPath: "responses.websocket.eligibility",
+    });
+    expect(mocks.tryResponsesWebsocketUpstream).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  test("portable websocket eligibility exceptions fail closed", async () => {
+    const provider = makeProvider();
+    const session = makeSession(provider);
+    mocks.isWebsocketClientRequest.mockReturnValueOnce(true);
+    mocks.evaluateResponsesWsEligibility.mockRejectedValueOnce(
+      new Error("websocket eligibility lookup failed")
+    );
+    const fetch = vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode");
+    const { doForward } = ProxyForwarder as unknown as {
+      doForward: (session: ProxySession, provider: Provider, baseUrl: string) => Promise<Response>;
+    };
+
+    await expect(doForward(session, provider, provider.url)).rejects.toMatchObject({
+      compatibilityCode: "provider_transport_unsupported",
+      fieldPath: "responses.websocket",
+    });
+    expect(mocks.tryResponsesWebsocketUpstream).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  test("portable websocket adapter exceptions fail closed while native requests retain HTTP fallback", async () => {
+    mocks.isWebsocketClientRequest.mockReturnValue(true);
+    mocks.evaluateResponsesWsEligibility.mockResolvedValue({
+      isWebsocketClient: true,
+      eligible: true,
+    });
+    mocks.tryResponsesWebsocketUpstream.mockRejectedValueOnce(
+      new Error("upstream websocket handshake failed")
+    );
+    const fetch = vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode");
+    const portableProvider = makeProvider();
+    const portableSession = makeSession(portableProvider);
+    const { doForward } = ProxyForwarder as unknown as {
+      doForward: (session: ProxySession, provider: Provider, baseUrl: string) => Promise<Response>;
+    };
+
+    await expect(
+      doForward(portableSession, portableProvider, portableProvider.url)
+    ).rejects.toMatchObject({
+      compatibilityCode: "provider_transport_unsupported",
+    });
+    expect(fetch).not.toHaveBeenCalled();
+
+    const nativeProvider = { ...makeProvider(), codexMultiAgentV2Mode: "native" } as Provider;
+    const nativeSession = makeSession(nativeProvider);
+    mocks.tryResponsesWebsocketUpstream.mockRejectedValueOnce(
+      new Error("upstream websocket handshake failed")
+    );
+    fetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ output: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    );
+
+    const nativeResponse = await doForward(nativeSession, nativeProvider, nativeProvider.url);
+
+    expect(nativeResponse.status).toBe(200);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(nativeSession.getPortableTransformationMetadata()).toBeNull();
   });
 });

@@ -15,7 +15,18 @@ vi.mock("@/lib/config", async (importOriginal) => ({
   getCachedSystemSettings: mocks.getCachedSystemSettings,
 }));
 
-function spawnAgentNamespace(namespace = "collaboration") {
+type CollaborationAction = "spawn_agent" | "send_message" | "followup_task";
+
+const COLLABORATION_ACTIONS: CollaborationAction[] = [
+  "spawn_agent",
+  "send_message",
+  "followup_task",
+];
+
+function spawnAgentNamespace(
+  namespace = "collaboration",
+  action: CollaborationAction = "spawn_agent"
+) {
   return {
     type: "namespace",
     name: namespace,
@@ -23,7 +34,7 @@ function spawnAgentNamespace(namespace = "collaboration") {
     tools: [
       {
         type: "function",
-        name: "spawn_agent",
+        name: action,
         description: "Spawns an agent",
         parameters: {
           type: "object",
@@ -36,12 +47,6 @@ function spawnAgentNamespace(namespace = "collaboration") {
       },
     ],
   };
-}
-
-function sendMessageNamespace() {
-  const namespace = spawnAgentNamespace();
-  namespace.tools[0].name = "send_message";
-  return namespace;
 }
 
 function makeRequest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -92,6 +97,78 @@ describe("Codex MultiAgentV2 portable request codec", () => {
     mocks.getCachedSystemSettings.mockResolvedValue({
       enableCodexMultiAgentV2Compatibility: true,
     });
+  });
+
+  test.each(
+    COLLABORATION_ACTIONS.flatMap((action) =>
+      (["tools", "additional_tools"] as const).flatMap((location) =>
+        (["native", "portable", "disabled"] as const).map((mode) => ({
+          action,
+          location,
+          mode,
+        }))
+      )
+    )
+  )("handles $action in $location for $mode mode", async ({ action, location, mode }) => {
+    const namespace = spawnAgentNamespace("collaboration", action);
+    const request = makeRequest(
+      location === "tools"
+        ? { tools: [namespace], input: [] }
+        : {
+            tools: undefined,
+            input: [{ type: "additional_tools", tools: [namespace] }],
+          }
+    );
+    const before = structuredClone(request);
+
+    if (mode === "disabled") {
+      await expect(
+        preparePortableCompatibilityRequest({
+          session: makeSession(request),
+          provider: makeProvider(mode),
+          request,
+        })
+      ).rejects.toMatchObject({ compatibilityCode: "provider_disabled" });
+      expect(request).toEqual(before);
+      return;
+    }
+
+    const result = await preparePortableCompatibilityRequest({
+      session: makeSession(request),
+      provider: makeProvider(mode),
+      request,
+    });
+    if (mode === "native") {
+      expect(result).toEqual({ request, metadata: null });
+      expect(result.request).toBe(request);
+      expect(request).toEqual(before);
+      return;
+    }
+
+    const tools =
+      location === "tools"
+        ? (result.request.tools as Array<Record<string, unknown>>)
+        : ((result.request.input as Array<Record<string, unknown>>)[0].tools as Array<
+            Record<string, unknown>
+          >);
+    expect(tools[0].name).toBe("collaboration-optimize");
+    const rewrittenTool = (tools[0].tools as Array<Record<string, unknown>>)[0];
+    const message = (
+      (rewrittenTool.parameters as Record<string, unknown>).properties as Record<string, unknown>
+    ).message;
+    expect(message).not.toHaveProperty("encrypted");
+    expect(result.metadata?.toolMappings).toEqual([
+      {
+        encodedNamespace: "collaboration-optimize",
+        originalNamespace: "collaboration",
+        originalName: action,
+      },
+    ]);
+    expect(result.metadata?.transformations).toEqual([
+      `${action}_message_schema`,
+      "collaboration_namespace",
+    ]);
+    expect(request).toEqual(before);
   });
 
   test("prepares spawn_agent without mutating the session request", async () => {
@@ -187,6 +264,169 @@ describe("Codex MultiAgentV2 portable request codec", () => {
     );
   });
 
+  test("converts single and mixed agent-message content without reordering other parts", async () => {
+    const mixedContent = [
+      { type: "input_text", text: "prefix", marker: 1 },
+      { type: "encrypted_content", encrypted_content: "Readable delegated task.", marker: 2 },
+      { type: "input_image", image_url: "data:image/png;base64,AA==", marker: 3 },
+    ];
+    const request = makeRequest({
+      input: [
+        {
+          type: "agent_message",
+          content: [{ type: "encrypted_content", encrypted_content: "Single readable task." }],
+        },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "already" }] },
+        { type: "agent_message", role: "user", content: mixedContent },
+      ],
+    });
+    const result = await preparePortableCompatibilityRequest({
+      session: makeSession(request),
+      provider: makeProvider(),
+      request,
+    });
+    const input = result.request.input as Array<Record<string, unknown>>;
+
+    expect(input[0]).toEqual({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "Single readable task." }],
+    });
+    expect(input[1]).toEqual({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "already" }],
+    });
+    expect(input[2].content).toEqual([
+      { type: "input_text", text: "prefix", marker: 1 },
+      { type: "input_text", text: "Readable delegated task.", marker: 2 },
+      { type: "input_image", image_url: "data:image/png;base64,AA==", marker: 3 },
+    ]);
+  });
+
+  test.each([
+    [
+      "wrong role",
+      { type: "agent_message", role: "assistant", content: [] },
+      "client_or_protocol_mismatch",
+    ],
+    ["missing content", { type: "agent_message" }, "client_or_protocol_mismatch"],
+    [
+      "already-consumed agent message",
+      { type: "agent_message", content: [{ type: "input_text", text: "task" }] },
+      "client_or_protocol_mismatch",
+    ],
+    [
+      "missing encrypted value",
+      { type: "agent_message", content: [{ type: "encrypted_content" }] },
+      "opaque_content",
+    ],
+    [
+      "conflicting text value",
+      {
+        type: "agent_message",
+        content: [{ type: "encrypted_content", encrypted_content: "task", text: "other" }],
+      },
+      "opaque_content",
+    ],
+  ])("rejects malformed input: %s", async (_label, item, compatibilityCode) => {
+    const request = makeRequest({ input: [item] });
+    const before = structuredClone(request);
+    await expect(
+      preparePortableCompatibilityRequest({
+        session: makeSession(request),
+        provider: makeProvider(),
+        request,
+      })
+    ).rejects.toMatchObject({ compatibilityCode });
+    expect(request).toEqual(before);
+  });
+
+  test.each(COLLABORATION_ACTIONS)(
+    "leaves an ordinary business tool named %s unchanged when the full gate does not match",
+    async (action) => {
+      const request = makeRequest({
+        tools: [
+          {
+            type: "function",
+            name: action,
+            parameters: {
+              type: "object",
+              properties: { message: { type: "string", encrypted: true } },
+            },
+          },
+        ],
+        input: [],
+      });
+      const result = await preparePortableCompatibilityRequest({
+        session: makeSession(request),
+        provider: makeProvider(),
+        request,
+      });
+
+      expect(result).toEqual({ request, metadata: null });
+      expect(result.request).toBe(request);
+      expect(mocks.getCachedSystemSettings).not.toHaveBeenCalled();
+    }
+  );
+
+  test("records every transformed action once in canonical order", async () => {
+    const namespace = spawnAgentNamespace();
+    namespace.tools.push(
+      spawnAgentNamespace("collaboration", "send_message").tools[0],
+      spawnAgentNamespace("collaboration", "followup_task").tools[0]
+    );
+    const request = makeRequest({ tools: [namespace], input: [] });
+    const result = await preparePortableCompatibilityRequest({
+      session: makeSession(request),
+      provider: makeProvider(),
+      request,
+    });
+
+    expect(result.metadata?.toolMappings.map((mapping) => mapping.originalName)).toEqual(
+      COLLABORATION_ACTIONS
+    );
+    expect(result.metadata?.transformations).toEqual([
+      "spawn_agent_message_schema",
+      "send_message_message_schema",
+      "followup_task_message_schema",
+      "collaboration_namespace",
+    ]);
+  });
+
+  test("preserves non-allowlisted collaboration fields and ordinary tools", async () => {
+    const namespace = spawnAgentNamespace();
+    const unsupportedCollaborationTool = {
+      type: "function",
+      name: "wait",
+      description: "Wait for agents",
+      parameters: {
+        type: "object",
+        properties: { timeout: { type: "number", encrypted: true } },
+      },
+    };
+    const businessTool = {
+      type: "function",
+      name: "lookup_order",
+      parameters: {
+        type: "object",
+        properties: { message: { type: "string", encrypted: true } },
+      },
+    };
+    namespace.tools.push(unsupportedCollaborationTool);
+    const request = makeRequest({ tools: [namespace, businessTool], input: [] });
+    const result = await preparePortableCompatibilityRequest({
+      session: makeSession(request),
+      provider: makeProvider(),
+      request,
+    });
+    const rewrittenTools = result.request.tools as Array<Record<string, unknown>>;
+    const rewrittenNamespaceTools = rewrittenTools[0].tools as unknown[];
+
+    expect(rewrittenNamespaceTools[1]).toEqual(unsupportedCollaborationTool);
+    expect(rewrittenTools[1]).toEqual(businessTool);
+  });
+
   test("keeps native mode byte-for-byte unchanged", async () => {
     const request = makeRequest();
     const before = JSON.stringify(request);
@@ -252,7 +492,7 @@ describe("Codex MultiAgentV2 portable request codec", () => {
     expect(failure.message).not.toContain(opaque);
   });
 
-  test("fails closed on reserved names, streaming, and unsupported actions", async () => {
+  test("fails closed on reserved names and streaming", async () => {
     const collision = makeRequest({
       tools: [
         spawnAgentNamespace(),
@@ -351,14 +591,44 @@ describe("Codex MultiAgentV2 portable request codec", () => {
         request: streaming,
       })
     ).rejects.toMatchObject({ compatibilityCode: "client_or_protocol_mismatch" });
+  });
 
-    const sendOnly = makeRequest({ tools: [sendMessageNamespace()], input: [] });
+  test.each([
+    ...COLLABORATION_ACTIONS.map((action) => ["bare action", action] as const),
+    ["reserved namespace", "collaboration-optimize"] as const,
+    ["reserved dot name", "collaboration-optimize.business"] as const,
+    ["reserved double name", "collaboration-optimize__business"] as const,
+  ])("rejects %s collision %s before changing the request", async (_label, name) => {
+    const request = makeRequest({
+      tools: [spawnAgentNamespace(), { type: "function", name, parameters: {} }],
+    });
+    const before = structuredClone(request);
     await expect(
       preparePortableCompatibilityRequest({
-        session: makeSession(sendOnly),
+        session: makeSession(request),
         provider: makeProvider(),
-        request: sendOnly,
+        request,
       })
-    ).rejects.toMatchObject({ compatibilityCode: "client_or_protocol_mismatch" });
+    ).rejects.toMatchObject({ compatibilityCode: "name_collision" });
+    expect(request).toEqual(before);
+  });
+
+  test("rejects duplicate action mappings across tool containers", async () => {
+    const request = makeRequest({
+      tools: [spawnAgentNamespace()],
+      input: [
+        {
+          type: "additional_tools",
+          tools: [spawnAgentNamespace()],
+        },
+      ],
+    });
+    await expect(
+      preparePortableCompatibilityRequest({
+        session: makeSession(request),
+        provider: makeProvider(),
+        request,
+      })
+    ).rejects.toMatchObject({ compatibilityCode: "name_collision" });
   });
 });

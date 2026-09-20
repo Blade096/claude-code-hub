@@ -1,17 +1,92 @@
 import { PortableCompatibilityError } from "./errors";
 import { isRecord } from "./guards";
 import {
+  PORTABLE_COLLABORATION_ACTIONS,
   PORTABLE_COLLABORATION_NAMESPACE,
+  type PortableCollaborationAction,
   type PortableToolIdentityMapping,
   type PortableTransformationMetadata,
 } from "./types";
 
-function findMapping(
+const ORIGINAL_COLLABORATION_NAMESPACE = "collaboration";
+const COLLABORATION_ACTIONS = new Set<string>(PORTABLE_COLLABORATION_ACTIONS);
+
+function isCollaborationAction(value: string): value is PortableCollaborationAction {
+  return COLLABORATION_ACTIONS.has(value);
+}
+
+function mappingKey(mapping: PortableToolIdentityMapping): string {
+  return `${mapping.encodedNamespace}\u0000${mapping.originalNamespace}\u0000${mapping.originalName}`;
+}
+
+function validateMappings(metadata: PortableTransformationMetadata): void {
+  if (!Array.isArray(metadata.toolMappings)) {
+    throw new PortableCompatibilityError("missing_mapping", {
+      fieldPath: "metadata.toolMappings",
+      providerId: metadata.providerId,
+    });
+  }
+
+  const seen = new Set<string>();
+  metadata.toolMappings.forEach((mapping, index) => {
+    if (
+      !isRecord(mapping) ||
+      typeof mapping.encodedNamespace !== "string" ||
+      mapping.encodedNamespace.length === 0 ||
+      typeof mapping.originalNamespace !== "string" ||
+      mapping.originalNamespace.length === 0 ||
+      typeof mapping.originalName !== "string" ||
+      !isCollaborationAction(mapping.originalName)
+    ) {
+      throw new PortableCompatibilityError("malformed_response", {
+        fieldPath: `metadata.toolMappings.${index}`,
+        providerId: metadata.providerId,
+      });
+    }
+    const key = mappingKey(mapping);
+    if (seen.has(key)) {
+      throw new PortableCompatibilityError("duplicate_mapping", {
+        fieldPath: `metadata.toolMappings.${index}`,
+        providerId: metadata.providerId,
+      });
+    }
+    seen.add(key);
+  });
+}
+
+function resolveMapping(
   metadata: PortableTransformationMetadata,
-  name: string
-): PortableToolIdentityMapping | null {
-  const matches = metadata.toolMappings.filter((mapping) => mapping.originalName === name);
-  return matches.length === 1 ? matches[0] : null;
+  name: string,
+  fieldPath: string,
+  omittedNamespace: boolean,
+  encodedNamespace?: string
+): PortableToolIdentityMapping {
+  if (!isCollaborationAction(name)) {
+    throw new PortableCompatibilityError("unknown_tool", {
+      fieldPath,
+      providerId: metadata.providerId,
+    });
+  }
+
+  const matches = metadata.toolMappings.filter(
+    (mapping) =>
+      mapping.originalName === name &&
+      (omittedNamespace || mapping.encodedNamespace === encodedNamespace)
+  );
+  if (matches.length === 0) {
+    throw new PortableCompatibilityError("missing_mapping", {
+      fieldPath,
+      providerId: metadata.providerId,
+    });
+  }
+  if (matches.length > 1) {
+    const uniqueIdentities = new Set(matches.map(mappingKey));
+    throw new PortableCompatibilityError(
+      uniqueIdentities.size === 1 ? "duplicate_mapping" : "ambiguous_mapping",
+      { fieldPath, providerId: metadata.providerId }
+    );
+  }
+  return matches[0];
 }
 
 function restoreFunctionCall(
@@ -21,44 +96,86 @@ function restoreFunctionCall(
 ): boolean {
   if (item.type !== "function_call" && item.type !== "custom_tool_call") return false;
 
-  const namespace = typeof item.namespace === "string" ? item.namespace : null;
-  const name = typeof item.name === "string" ? item.name : null;
-  if (namespace === "collaboration" && name === "spawn_agent") return false;
-  if (namespace === null && name === "collaboration__spawn_agent") return false;
-
-  let encodedStyle: "structured" | "dot" | "double" | "omitted" | null = null;
-  let toolName: string | null = null;
-  if (namespace === PORTABLE_COLLABORATION_NAMESPACE) {
-    encodedStyle = "structured";
-    toolName = name;
-  } else if (namespace === null && name?.startsWith(`${PORTABLE_COLLABORATION_NAMESPACE}.`)) {
-    encodedStyle = "dot";
-    toolName = name.slice(PORTABLE_COLLABORATION_NAMESPACE.length + 1);
-  } else if (namespace === null && name?.startsWith(`${PORTABLE_COLLABORATION_NAMESPACE}__`)) {
-    encodedStyle = "double";
-    toolName = name.slice(PORTABLE_COLLABORATION_NAMESPACE.length + 2);
-  } else if (namespace === null && name !== null && findMapping(metadata, name)) {
-    encodedStyle = "omitted";
-    toolName = name;
+  if (Object.hasOwn(item, "namespace") && typeof item.namespace !== "string") {
+    throw new PortableCompatibilityError("malformed_response", {
+      fieldPath: `${fieldPath}.namespace`,
+      providerId: metadata.providerId,
+    });
   }
-
-  if (encodedStyle === null) return false;
-  if (!toolName) {
+  if (typeof item.name !== "string" || item.name.length === 0) {
     throw new PortableCompatibilityError("malformed_response", {
       fieldPath: `${fieldPath}.name`,
       providerId: metadata.providerId,
     });
   }
 
-  const mapping = findMapping(metadata, toolName);
-  if (!mapping) {
-    throw new PortableCompatibilityError("missing_mapping", {
+  const namespace = typeof item.namespace === "string" ? item.namespace : null;
+  const name = item.name;
+
+  if (namespace === ORIGINAL_COLLABORATION_NAMESPACE && isCollaborationAction(name)) {
+    if (
+      !metadata.toolMappings.some(
+        (mapping) => mapping.originalNamespace === namespace && mapping.originalName === name
+      )
+    ) {
+      throw new PortableCompatibilityError("missing_mapping", {
+        fieldPath: `${fieldPath}.name`,
+        providerId: metadata.providerId,
+      });
+    }
+    return false;
+  }
+  if (namespace === null && name.startsWith(`${ORIGINAL_COLLABORATION_NAMESPACE}__`)) {
+    const originalName = name.slice(ORIGINAL_COLLABORATION_NAMESPACE.length + 2);
+    if (isCollaborationAction(originalName)) {
+      if (
+        !metadata.toolMappings.some(
+          (mapping) =>
+            mapping.originalNamespace === ORIGINAL_COLLABORATION_NAMESPACE &&
+            mapping.originalName === originalName
+        )
+      ) {
+        throw new PortableCompatibilityError("missing_mapping", {
+          fieldPath: `${fieldPath}.name`,
+          providerId: metadata.providerId,
+        });
+      }
+      return false;
+    }
+  }
+
+  let style: "structured" | "dot" | "double" | "omitted" | null = null;
+  let actionName: string | null = null;
+  if (namespace === PORTABLE_COLLABORATION_NAMESPACE) {
+    style = "structured";
+    actionName = name;
+  } else if (namespace === null && name.startsWith(`${PORTABLE_COLLABORATION_NAMESPACE}.`)) {
+    style = "dot";
+    actionName = name.slice(PORTABLE_COLLABORATION_NAMESPACE.length + 1);
+  } else if (namespace === null && name.startsWith(`${PORTABLE_COLLABORATION_NAMESPACE}__`)) {
+    style = "double";
+    actionName = name.slice(PORTABLE_COLLABORATION_NAMESPACE.length + 2);
+  } else if (namespace === null && isCollaborationAction(name)) {
+    style = "omitted";
+    actionName = name;
+  }
+
+  if (style === null) return false;
+  if (!actionName) {
+    throw new PortableCompatibilityError("malformed_response", {
       fieldPath: `${fieldPath}.name`,
       providerId: metadata.providerId,
     });
   }
 
-  if (encodedStyle === "double") {
+  const mapping = resolveMapping(
+    metadata,
+    actionName,
+    `${fieldPath}.name`,
+    style === "omitted",
+    style === "omitted" ? undefined : PORTABLE_COLLABORATION_NAMESPACE
+  );
+  if (style === "double") {
     delete item.namespace;
     item.name = `${mapping.originalNamespace}__${mapping.originalName}`;
   } else {
@@ -81,7 +198,13 @@ function restoreOutputArray(
   }
   let restored = 0;
   output.forEach((item, index) => {
-    if (isRecord(item) && restoreFunctionCall(item, metadata, `${fieldPath}.${index}`)) {
+    if (!isRecord(item)) {
+      throw new PortableCompatibilityError("malformed_response", {
+        fieldPath: `${fieldPath}.${index}`,
+        providerId: metadata.providerId,
+      });
+    }
+    if (restoreFunctionCall(item, metadata, `${fieldPath}.${index}`)) {
       restored += 1;
     }
   });
@@ -98,6 +221,7 @@ export function restorePortableCompatibilityPayload(
       providerId: metadata.providerId,
     });
   }
+  validateMappings(metadata);
 
   const restoredPayload = structuredClone(payload);
   let restoredCount = 0;

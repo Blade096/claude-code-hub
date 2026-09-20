@@ -6,7 +6,21 @@ import {
   type PortableTransformationMetadata,
 } from "@/app/v1/_lib/proxy/codex-portable-compatibility";
 
-function metadata(): PortableTransformationMetadata {
+type CollaborationAction = "spawn_agent" | "send_message" | "followup_task";
+
+const COLLABORATION_ACTIONS: CollaborationAction[] = [
+  "spawn_agent",
+  "send_message",
+  "followup_task",
+];
+
+function metadata(
+  actions: CollaborationAction[] = ["spawn_agent"]
+): PortableTransformationMetadata {
+  const transformations = actions.map(
+    (action) => `${action}_message_schema` as const
+  ) as PortableTransformationMetadata["transformations"];
+  transformations.push("collaboration_namespace");
   const audit = {
     type: "codex_multi_agent_v2_portable" as const,
     scope: "request" as const,
@@ -14,7 +28,7 @@ function metadata(): PortableTransformationMetadata {
     providerId: 42,
     requestedModel: "requested-model",
     actualModel: "actual-model",
-    transformations: ["spawn_agent_message_schema" as const, "collaboration_namespace" as const],
+    transformations: [...transformations],
     responseRestore: "pending" as const,
     errorCode: null,
   };
@@ -26,40 +40,44 @@ function metadata(): PortableTransformationMetadata {
     transformations: [...audit.transformations],
     matchedPaths: ["tools.0.tools.0"],
     responseRestore: "pending",
-    toolMappings: [
-      {
-        encodedNamespace: "collaboration-optimize",
-        originalNamespace: "collaboration",
-        originalName: "spawn_agent",
-      },
-    ],
+    toolMappings: actions.map((action) => ({
+      encodedNamespace: "collaboration-optimize",
+      originalNamespace: "collaboration",
+      originalName: action,
+    })),
     audit,
   };
 }
 
 describe("Codex MultiAgentV2 portable response codec", () => {
-  test.each([
-    [
-      "structured namespace",
-      { namespace: "collaboration-optimize", name: "spawn_agent" },
-      { namespace: "collaboration", name: "spawn_agent" },
-    ],
-    [
-      "dot-flattened name",
-      { name: "collaboration-optimize.spawn_agent" },
-      { namespace: "collaboration", name: "spawn_agent" },
-    ],
-    [
-      "double-underscore name",
-      { name: "collaboration-optimize__spawn_agent" },
-      { name: "collaboration__spawn_agent" },
-    ],
-    [
-      "omitted namespace",
-      { name: "spawn_agent" },
-      { namespace: "collaboration", name: "spawn_agent" },
-    ],
-  ])("restores %s using request-local metadata", (_label, identity, expected) => {
+  test.each(
+    COLLABORATION_ACTIONS.flatMap((action) => [
+      {
+        action,
+        label: "structured namespace",
+        identity: { namespace: "collaboration-optimize", name: action },
+        expected: { namespace: "collaboration", name: action },
+      },
+      {
+        action,
+        label: "dot-flattened name",
+        identity: { name: `collaboration-optimize.${action}` },
+        expected: { namespace: "collaboration", name: action },
+      },
+      {
+        action,
+        label: "double-underscore name",
+        identity: { name: `collaboration-optimize__${action}` },
+        expected: { name: `collaboration__${action}` },
+      },
+      {
+        action,
+        label: "omitted namespace",
+        identity: { name: action },
+        expected: { namespace: "collaboration", name: action },
+      },
+    ])
+  )("restores $action with $label", ({ identity, expected }) => {
     const argumentsText = JSON.stringify({ message: "delegated task remains untouched" });
     const result = restorePortableCompatibilityPayload(
       {
@@ -72,7 +90,7 @@ describe("Codex MultiAgentV2 portable response codec", () => {
           },
         ],
       },
-      metadata()
+      metadata(COLLABORATION_ACTIONS)
     );
 
     expect(result.restoredCount).toBe(1);
@@ -118,6 +136,97 @@ describe("Codex MultiAgentV2 portable response codec", () => {
         metadata()
       )
     ).toThrowError(PortableCompatibilityError);
+    expect(() =>
+      restorePortableCompatibilityPayload(
+        {
+          output: [
+            {
+              type: "function_call",
+              namespace: "collaboration-optimize",
+              name: "send_message",
+              arguments: "{}",
+            },
+          ],
+        },
+        metadata()
+      )
+    ).toThrowError(expect.objectContaining({ compatibilityCode: "missing_mapping" }));
+  });
+
+  test("distinguishes unknown, duplicate, and ambiguous mappings", () => {
+    expect(() =>
+      restorePortableCompatibilityPayload(
+        {
+          output: [
+            {
+              type: "function_call",
+              name: "collaboration-optimize.unknown_action",
+              arguments: "{}",
+            },
+          ],
+        },
+        metadata()
+      )
+    ).toThrowError(expect.objectContaining({ compatibilityCode: "unknown_tool" }));
+
+    const duplicate = metadata();
+    duplicate.toolMappings.push({ ...duplicate.toolMappings[0] });
+    expect(() =>
+      restorePortableCompatibilityPayload(
+        { output: [{ type: "function_call", name: "spawn_agent", arguments: "{}" }] },
+        duplicate
+      )
+    ).toThrowError(expect.objectContaining({ compatibilityCode: "duplicate_mapping" }));
+
+    const ambiguous = metadata();
+    ambiguous.toolMappings.push({
+      ...ambiguous.toolMappings[0],
+      encodedNamespace: "alternate-collaboration-optimize",
+    });
+    expect(() =>
+      restorePortableCompatibilityPayload(
+        { output: [{ type: "function_call", name: "spawn_agent", arguments: "{}" }] },
+        ambiguous
+      )
+    ).toThrowError(expect.objectContaining({ compatibilityCode: "ambiguous_mapping" }));
+  });
+
+  test("does not include tool arguments in compatibility failures", () => {
+    const delegatedText = "private delegated task body";
+    let failure: unknown;
+    try {
+      restorePortableCompatibilityPayload(
+        {
+          output: [
+            {
+              type: "function_call",
+              name: "collaboration-optimize.unknown_action",
+              arguments: JSON.stringify({ message: delegatedText }),
+            },
+          ],
+        },
+        metadata()
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(PortableCompatibilityError);
+    expect(JSON.stringify(failure)).not.toContain(delegatedText);
+    expect((failure as PortableCompatibilityError).message).not.toContain(delegatedText);
+  });
+
+  test.each([
+    ["missing call name", { type: "function_call", arguments: "{}" }],
+    [
+      "non-string namespace",
+      { type: "function_call", namespace: 1, name: "spawn_agent", arguments: "{}" },
+    ],
+    ["non-object output item", null],
+  ])("fails closed on malformed function-call shape: %s", (_label, item) => {
+    expect(() => restorePortableCompatibilityPayload({ output: [item] }, metadata())).toThrowError(
+      expect.objectContaining({ compatibilityCode: "malformed_response" })
+    );
   });
 
   test("rebuilds a non-streaming JSON response and updates safe audit state", async () => {

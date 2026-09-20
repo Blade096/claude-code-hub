@@ -348,7 +348,11 @@ export type CodexMultiAgentV2PortableSpecialSetting = {
   requestedModel: string | null;
   actualModel: string | null;
   transformations: Array<
-    "spawn_agent_message_schema" | "collaboration_namespace" | "agent_message_input"
+    | "spawn_agent_message_schema"
+    | "send_message_message_schema"
+    | "followup_task_message_schema"
+    | "collaboration_namespace"
+    | "agent_message_input"
   >;
   responseRestore: "pending" | "restored" | "not_needed" | "failed";
   errorCode: string | null;

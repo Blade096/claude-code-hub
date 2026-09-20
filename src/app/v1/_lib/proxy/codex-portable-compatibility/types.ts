@@ -2,14 +2,24 @@ import type { CodexMultiAgentV2PortableSpecialSetting } from "@/types/special-se
 
 export const PORTABLE_COLLABORATION_NAMESPACE = "collaboration-optimize";
 
+export const PORTABLE_COLLABORATION_ACTIONS = [
+  "spawn_agent",
+  "send_message",
+  "followup_task",
+] as const;
+
+export type PortableCollaborationAction = (typeof PORTABLE_COLLABORATION_ACTIONS)[number];
+
 export type PortableToolIdentityMapping = {
-  encodedNamespace: typeof PORTABLE_COLLABORATION_NAMESPACE;
-  originalNamespace: "collaboration";
-  originalName: "spawn_agent";
+  encodedNamespace: string;
+  originalNamespace: string;
+  originalName: PortableCollaborationAction;
 };
 
 export type PortableTransformation =
   | "spawn_agent_message_schema"
+  | "send_message_message_schema"
+  | "followup_task_message_schema"
   | "collaboration_namespace"
   | "agent_message_input";
 

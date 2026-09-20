@@ -9,7 +9,9 @@ export {
   restorePortableCompatibilityResponse,
 } from "./response-codec";
 export {
+  PORTABLE_COLLABORATION_ACTIONS,
   PORTABLE_COLLABORATION_NAMESPACE,
+  type PortableCollaborationAction,
   type PortablePreparation,
   type PortableToolIdentityMapping,
   type PortableTransformation,

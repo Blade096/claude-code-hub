@@ -6,7 +6,10 @@ export type PortableCompatibilityErrorCode =
   | "client_or_protocol_mismatch"
   | "opaque_content"
   | "name_collision"
+  | "unknown_tool"
   | "missing_mapping"
+  | "duplicate_mapping"
+  | "ambiguous_mapping"
   | "malformed_response";
 
 const ERROR_MESSAGES: Record<PortableCompatibilityErrorCode, string> = {
@@ -16,7 +19,10 @@ const ERROR_MESSAGES: Record<PortableCompatibilityErrorCode, string> = {
     "The request is not supported by Codex MultiAgentV2 portable compatibility.",
   opaque_content: "Codex MultiAgentV2 portable input contains unreadable opaque content.",
   name_collision: "Codex MultiAgentV2 portable tool names are ambiguous.",
+  unknown_tool: "Codex MultiAgentV2 portable response contains an unknown tool.",
   missing_mapping: "Codex MultiAgentV2 portable response has no request-local tool mapping.",
+  duplicate_mapping: "Codex MultiAgentV2 portable response has duplicate tool mappings.",
+  ambiguous_mapping: "Codex MultiAgentV2 portable response tool identity is ambiguous.",
   malformed_response: "Codex MultiAgentV2 portable response is malformed.",
 };
 

@@ -5,15 +5,18 @@ import type { ProxySession } from "../session";
 import { PortableCompatibilityError } from "./errors";
 import { isRecord } from "./guards";
 import {
+  PORTABLE_COLLABORATION_ACTIONS,
   PORTABLE_COLLABORATION_NAMESPACE,
+  type PortableCollaborationAction,
   type PortablePreparation,
+  type PortableToolIdentityMapping,
   type PortableTransformation,
   type PortableTransformationMetadata,
 } from "./types";
 
 const ORIGINAL_COLLABORATION_NAMESPACE = "collaboration";
-const SUPPORTED_TOOL_NAME = "spawn_agent";
 const PORTABLE_REQUEST_METADATA = Symbol("codex-portable-request-metadata");
+const COLLABORATION_ACTIONS = new Set<string>(PORTABLE_COLLABORATION_ACTIONS);
 
 type MarkedPortableRequest = Record<string, unknown> & {
   [PORTABLE_REQUEST_METADATA]?: PortableTransformationMetadata;
@@ -23,6 +26,17 @@ type ToolContainer = {
   tools: unknown[];
   path: string;
 };
+
+type CollaborationToolTarget = {
+  action: PortableCollaborationAction;
+  namespace: Record<string, unknown>;
+  path: string;
+  tool: Record<string, unknown>;
+};
+
+function isCollaborationAction(value: unknown): value is PortableCollaborationAction {
+  return typeof value === "string" && COLLABORATION_ACTIONS.has(value);
+}
 
 function collectToolContainers(request: Record<string, unknown>): ToolContainer[] {
   const containers: ToolContainer[] = [];
@@ -40,42 +54,161 @@ function collectToolContainers(request: Record<string, unknown>): ToolContainer[
   return containers;
 }
 
-function hasSpawnAgentSchema(namespace: Record<string, unknown>): boolean {
-  if (!Array.isArray(namespace.tools)) return false;
-  return namespace.tools.some(
-    (tool) => isRecord(tool) && tool.type === "function" && tool.name === SUPPORTED_TOOL_NAME
+function isReservedPortableName(name: unknown): boolean {
+  return (
+    name === PORTABLE_COLLABORATION_NAMESPACE ||
+    (typeof name === "string" &&
+      (name.startsWith(`${PORTABLE_COLLABORATION_NAMESPACE}.`) ||
+        name.startsWith(`${PORTABLE_COLLABORATION_NAMESPACE}__`)))
   );
 }
 
-function assertNoReservedToolCollision(
-  tool: Record<string, unknown>,
+function assertNoToolIdentityCollisions(
+  tools: unknown[],
   path: string,
+  targetTools: Set<Record<string, unknown>>,
   providerId: number
 ): void {
+  tools.forEach((candidate, index) => {
+    if (!isRecord(candidate)) return;
+    const toolPath = `${path}.${index}`;
+    if (isReservedPortableName(candidate.name)) {
+      throw new PortableCompatibilityError("name_collision", {
+        fieldPath: `${toolPath}.name`,
+        providerId,
+      });
+    }
+    if (isCollaborationAction(candidate.name) && !targetTools.has(candidate)) {
+      throw new PortableCompatibilityError("name_collision", {
+        fieldPath: `${toolPath}.name`,
+        providerId,
+      });
+    }
+    if (candidate.type === "namespace" && Array.isArray(candidate.tools)) {
+      assertNoToolIdentityCollisions(candidate.tools, `${toolPath}.tools`, targetTools, providerId);
+    }
+  });
+}
+
+function assertValidMessageSchema(target: CollaborationToolTarget, providerId: number): void {
+  const parameters = target.tool.parameters;
+  const properties = isRecord(parameters) ? parameters.properties : null;
+  const message = isRecord(properties) ? properties.message : null;
+  const fieldPath = `${target.path}.parameters.properties.message`;
   if (
-    tool.name === PORTABLE_COLLABORATION_NAMESPACE ||
-    (typeof tool.name === "string" &&
-      (tool.name.startsWith(`${PORTABLE_COLLABORATION_NAMESPACE}.`) ||
-        tool.name.startsWith(`${PORTABLE_COLLABORATION_NAMESPACE}__`)))
+    !isRecord(parameters) ||
+    parameters.type !== "object" ||
+    !isRecord(message) ||
+    message.type !== "string"
   ) {
-    throw new PortableCompatibilityError("name_collision", {
-      fieldPath: `${path}.name`,
+    throw new PortableCompatibilityError("client_or_protocol_mismatch", {
+      fieldPath,
       providerId,
     });
   }
-  if (tool.name === SUPPORTED_TOOL_NAME) {
-    throw new PortableCompatibilityError("name_collision", {
-      fieldPath: `${path}.name`,
+  if (message.encrypted !== true) {
+    throw new PortableCompatibilityError("client_or_protocol_mismatch", {
+      fieldPath: `${fieldPath}.encrypted`,
       providerId,
     });
   }
-  if (tool.type === "namespace" && Array.isArray(tool.tools)) {
-    tool.tools.forEach((nested, index) => {
-      if (isRecord(nested)) {
-        assertNoReservedToolCollision(nested, `${path}.tools.${index}`, providerId);
+}
+
+function collectCollaborationToolTargets(
+  request: Record<string, unknown>,
+  providerId: number
+): CollaborationToolTarget[] {
+  const containers = collectToolContainers(request);
+  const targets: CollaborationToolTarget[] = [];
+
+  for (const container of containers) {
+    container.tools.forEach((candidate, namespaceIndex) => {
+      if (
+        !isRecord(candidate) ||
+        candidate.type !== "namespace" ||
+        candidate.name !== ORIGINAL_COLLABORATION_NAMESPACE ||
+        !Array.isArray(candidate.tools)
+      ) {
+        return;
       }
+      candidate.tools.forEach((tool, toolIndex) => {
+        if (!isRecord(tool) || tool.type !== "function" || !isCollaborationAction(tool.name)) {
+          return;
+        }
+        targets.push({
+          action: tool.name,
+          namespace: candidate,
+          path: `${container.path}.${namespaceIndex}.tools.${toolIndex}`,
+          tool,
+        });
+      });
     });
   }
+
+  if (targets.length === 0) {
+    throw new PortableCompatibilityError("client_or_protocol_mismatch", {
+      fieldPath: "tools",
+      providerId,
+    });
+  }
+
+  const targetTools = new Set(targets.map((target) => target.tool));
+  for (const container of containers) {
+    assertNoToolIdentityCollisions(container.tools, container.path, targetTools, providerId);
+  }
+
+  const actionPaths = new Map<PortableCollaborationAction, string>();
+  for (const target of targets) {
+    if (actionPaths.has(target.action)) {
+      throw new PortableCompatibilityError("name_collision", {
+        fieldPath: target.path,
+        providerId,
+      });
+    }
+    actionPaths.set(target.action, target.path);
+    assertValidMessageSchema(target, providerId);
+  }
+  return targets;
+}
+
+function rewriteCollaborationTools(
+  request: Record<string, unknown>,
+  providerId: number
+): {
+  mappings: PortableToolIdentityMapping[];
+  paths: string[];
+  transformations: PortableTransformation[];
+} {
+  const targets = collectCollaborationToolTargets(request, providerId);
+  const namespaces = new Set<Record<string, unknown>>();
+  const actions = new Set<PortableCollaborationAction>();
+
+  for (const target of targets) {
+    const parameters = target.tool.parameters as Record<string, unknown>;
+    const properties = parameters.properties as Record<string, unknown>;
+    const message = properties.message as Record<string, unknown>;
+    delete message.encrypted;
+    namespaces.add(target.namespace);
+    actions.add(target.action);
+  }
+  for (const namespace of namespaces) {
+    namespace.name = PORTABLE_COLLABORATION_NAMESPACE;
+  }
+
+  const mappings: PortableToolIdentityMapping[] = [];
+  const transformations: PortableTransformation[] = [];
+  for (const action of PORTABLE_COLLABORATION_ACTIONS) {
+    if (!actions.has(action)) continue;
+    mappings.push({
+      encodedNamespace: PORTABLE_COLLABORATION_NAMESPACE,
+      originalNamespace: ORIGINAL_COLLABORATION_NAMESPACE,
+      originalName: action,
+    });
+    transformations.push(`${action}_message_schema` as PortableTransformation);
+  }
+  transformations.push("collaboration_namespace");
+
+  return { mappings, paths: targets.map((target) => target.path), transformations };
 }
 
 function isOpaqueContent(value: string): boolean {
@@ -113,7 +246,11 @@ function rewriteAgentMessages(
     item.content.forEach((part, partIndex) => {
       if (!isRecord(part) || part.type !== "encrypted_content") return;
       const partPath = `${itemPath}.content.${partIndex}`;
-      if (typeof part.encrypted_content !== "string" || isOpaqueContent(part.encrypted_content)) {
+      if (
+        typeof part.encrypted_content !== "string" ||
+        Object.hasOwn(part, "text") ||
+        isOpaqueContent(part.encrypted_content)
+      ) {
         throw new PortableCompatibilityError("opaque_content", {
           fieldPath: `${partPath}.encrypted_content`,
           providerId,
@@ -139,87 +276,6 @@ function rewriteAgentMessages(
   });
 
   return { changed, paths };
-}
-
-function rewriteSpawnAgentTools(
-  request: Record<string, unknown>,
-  providerId: number
-): { paths: string[] } {
-  const containers = collectToolContainers(request);
-  const originalNamespaces: Array<{ namespace: Record<string, unknown>; path: string }> = [];
-
-  for (const container of containers) {
-    container.tools.forEach((tool, toolIndex) => {
-      if (!isRecord(tool)) return;
-      const path = `${container.path}.${toolIndex}`;
-      if (
-        tool.type === "namespace" &&
-        tool.name === ORIGINAL_COLLABORATION_NAMESPACE &&
-        hasSpawnAgentSchema(tool)
-      ) {
-        originalNamespaces.push({ namespace: tool, path });
-        return;
-      }
-      assertNoReservedToolCollision(tool, path, providerId);
-    });
-  }
-
-  if (originalNamespaces.length === 0) {
-    throw new PortableCompatibilityError("client_or_protocol_mismatch", {
-      fieldPath: "tools",
-      providerId,
-    });
-  }
-
-  const paths: string[] = [];
-  for (const target of originalNamespaces) {
-    const namespaceTools = target.namespace.tools as unknown[];
-    namespaceTools.forEach((tool, index) => {
-      if (isRecord(tool) && !(tool.type === "function" && tool.name === SUPPORTED_TOOL_NAME)) {
-        assertNoReservedToolCollision(tool, `${target.path}.tools.${index}`, providerId);
-      }
-    });
-    const spawnTools = namespaceTools
-      .map((tool, index) => ({ tool, index }))
-      .filter(
-        (entry): entry is { tool: Record<string, unknown>; index: number } =>
-          isRecord(entry.tool) &&
-          entry.tool.type === "function" &&
-          entry.tool.name === SUPPORTED_TOOL_NAME
-      );
-
-    for (const { tool, index } of spawnTools) {
-      const toolPath = `${target.path}.tools.${index}`;
-      const parameters = tool.parameters;
-      const properties = isRecord(parameters) ? parameters.properties : null;
-      const message = isRecord(properties) ? properties.message : null;
-      if (
-        !isRecord(parameters) ||
-        parameters.type !== "object" ||
-        !isRecord(message) ||
-        message.type !== "string"
-      ) {
-        throw new PortableCompatibilityError("client_or_protocol_mismatch", {
-          fieldPath: `${toolPath}.parameters.properties.message`,
-          providerId,
-        });
-      }
-      if (
-        target.namespace.name === ORIGINAL_COLLABORATION_NAMESPACE &&
-        message.encrypted !== true
-      ) {
-        throw new PortableCompatibilityError("client_or_protocol_mismatch", {
-          fieldPath: `${toolPath}.parameters.properties.message.encrypted`,
-          providerId,
-        });
-      }
-      delete message.encrypted;
-      paths.push(toolPath);
-    }
-    target.namespace.name = PORTABLE_COLLABORATION_NAMESPACE;
-  }
-
-  return { paths };
 }
 
 function resolveActualModel(session: ProxySession): string | null {
@@ -272,12 +328,9 @@ export async function preparePortableCompatibilityRequest({
   }
 
   const prepared = structuredClone(request);
-  const toolResult = rewriteSpawnAgentTools(prepared, provider.id);
+  const toolResult = rewriteCollaborationTools(prepared, provider.id);
   const inputResult = rewriteAgentMessages(prepared, provider.id);
-  const transformations: PortableTransformation[] = [
-    "spawn_agent_message_schema",
-    "collaboration_namespace",
-  ];
+  const transformations = [...toolResult.transformations];
   if (inputResult.changed) transformations.push("agent_message_input");
 
   const audit = {
@@ -296,13 +349,7 @@ export async function preparePortableCompatibilityRequest({
     providerId: provider.id,
     requestedModel: session.request.model,
     actualModel: resolveActualModel(session),
-    toolMappings: [
-      {
-        encodedNamespace: PORTABLE_COLLABORATION_NAMESPACE,
-        originalNamespace: ORIGINAL_COLLABORATION_NAMESPACE,
-        originalName: SUPPORTED_TOOL_NAME,
-      },
-    ],
+    toolMappings: toolResult.mappings,
     transformations,
     matchedPaths: [...toolResult.paths, ...inputResult.paths],
     responseRestore: "pending",

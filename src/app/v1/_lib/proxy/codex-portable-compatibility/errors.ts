@@ -10,7 +10,8 @@ export type PortableCompatibilityErrorCode =
   | "missing_mapping"
   | "duplicate_mapping"
   | "ambiguous_mapping"
-  | "malformed_response";
+  | "malformed_response"
+  | "response_identity_mismatch";
 
 const ERROR_MESSAGES: Record<PortableCompatibilityErrorCode, string> = {
   feature_disabled: "Codex MultiAgentV2 portable compatibility is not enabled.",
@@ -24,6 +25,8 @@ const ERROR_MESSAGES: Record<PortableCompatibilityErrorCode, string> = {
   duplicate_mapping: "Codex MultiAgentV2 portable response has duplicate tool mappings.",
   ambiguous_mapping: "Codex MultiAgentV2 portable response tool identity is ambiguous.",
   malformed_response: "Codex MultiAgentV2 portable response is malformed.",
+  response_identity_mismatch:
+    "Codex MultiAgentV2 portable response changed a function-call identity.",
 };
 
 export class PortableCompatibilityError extends ProxyError {

@@ -509,7 +509,7 @@ describe("Codex MultiAgentV2 portable request codec", () => {
     expect(failure.message).not.toContain(opaque);
   });
 
-  test("fails closed on reserved names and streaming", async () => {
+  test("fails closed on reserved names and supports streaming requests", async () => {
     const collision = makeRequest({
       tools: [
         spawnAgentNamespace(),
@@ -601,13 +601,16 @@ describe("Codex MultiAgentV2 portable request codec", () => {
     ).rejects.toMatchObject({ compatibilityCode: "name_collision" });
 
     const streaming = makeRequest({ stream: true });
-    await expect(
-      preparePortableCompatibilityRequest({
-        session: makeSession(streaming),
-        provider: makeProvider(),
-        request: streaming,
-      })
-    ).rejects.toMatchObject({ compatibilityCode: "client_or_protocol_mismatch" });
+    const preparedStreaming = await preparePortableCompatibilityRequest({
+      session: makeSession(streaming),
+      provider: makeProvider(),
+      request: streaming,
+    });
+    expect(preparedStreaming.request).toMatchObject({
+      stream: true,
+      tools: [{ name: "collaboration-optimize" }],
+    });
+    expect(preparedStreaming.metadata).not.toBeNull();
   });
 
   test.each([

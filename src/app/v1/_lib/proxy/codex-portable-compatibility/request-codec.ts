@@ -376,13 +376,6 @@ export async function preparePortableCompatibilityRequest({
   if (!settings.enableCodexMultiAgentV2Compatibility) {
     throw new PortableCompatibilityError("feature_disabled", { providerId: provider.id });
   }
-  if (request.stream === true) {
-    throw new PortableCompatibilityError("client_or_protocol_mismatch", {
-      fieldPath: "stream",
-      providerId: provider.id,
-    });
-  }
-
   const priorMetadata = (request as MarkedPortableRequest)[PORTABLE_REQUEST_METADATA];
   if (priorMetadata) {
     if (priorMetadata.providerId !== provider.id) {

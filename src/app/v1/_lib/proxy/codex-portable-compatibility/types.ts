@@ -40,3 +40,12 @@ export type PortablePreparation = {
   request: Record<string, unknown>;
   metadata: PortableTransformationMetadata | null;
 };
+
+export type PortableResponseCallBinding = {
+  callToken: string;
+  toolIdentity: string;
+};
+
+export type PortableResponseRestoreState = {
+  callIdentities: Map<string, PortableResponseCallBinding>;
+};

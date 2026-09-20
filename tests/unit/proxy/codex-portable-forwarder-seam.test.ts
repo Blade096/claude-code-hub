@@ -364,6 +364,141 @@ describe("portable compatibility proxy seams", () => {
     }
   );
 
+  test.each(COLLABORATION_ACTIONS)(
+    "streams portable %s through the mock-upstream boundary and restores every call event",
+    async (action) => {
+      const provider = makeProvider();
+      const session = makeSession(provider, {
+        stream: true,
+        tools: [spawnAgentNamespace(action)],
+      });
+      let upstreamBody: Record<string, unknown> | null = null;
+      vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode").mockImplementationOnce(
+        async (_url: string, init: RequestInit) => {
+          upstreamBody = JSON.parse(bodyText(init.body));
+          const events = [
+            {
+              type: "response.output_item.added",
+              output_index: 0,
+              item: {
+                id: "item_boundary",
+                type: "function_call",
+                call_id: "call_boundary",
+                namespace: "collaboration-optimize",
+                name: action,
+                arguments: "",
+              },
+            },
+            {
+              type: "response.function_call_arguments.delta",
+              item_id: "item_boundary",
+              output_index: 0,
+              delta: '{"message":"child task"}',
+            },
+            {
+              type: "response.output_item.done",
+              output_index: 0,
+              item: {
+                id: "item_boundary",
+                type: "function_call",
+                call_id: "call_boundary",
+                name: `collaboration-optimize.${action}`,
+                arguments: '{"message":"child task"}',
+              },
+            },
+            {
+              type: "response.completed",
+              response: {
+                output: [
+                  {
+                    id: "item_boundary",
+                    type: "function_call",
+                    call_id: "call_boundary",
+                    name: `collaboration-optimize__${action}`,
+                    arguments: '{"message":"child task"}',
+                  },
+                ],
+              },
+            },
+          ];
+          return new Response(
+            events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+            {
+              status: 200,
+              headers: { "content-type": "text/event-stream" },
+            }
+          );
+        }
+      );
+
+      const { doForward } = ProxyForwarder as unknown as {
+        doForward: (
+          session: ProxySession,
+          provider: Provider,
+          baseUrl: string
+        ) => Promise<Response>;
+      };
+      const upstreamResponse = await doForward(session, provider, provider.url);
+      const handleStream = vi
+        .spyOn(ProxyResponseHandler as never, "handleStream")
+        .mockImplementationOnce(async (_session: ProxySession, response: Response) => response);
+      const clientResponse = await ProxyResponseHandler.dispatch(session, upstreamResponse);
+      const responseText = await clientResponse.text();
+
+      expect(upstreamBody).toMatchObject({
+        stream: true,
+        tools: [{ name: "collaboration-optimize" }],
+      });
+      expect(responseText).toContain(`"namespace":"collaboration","name":"${action}"`);
+      expect(responseText).toContain(`"name":"collaboration__${action}"`);
+      expect(responseText).toContain('{\\"message\\":\\"child task\\"}');
+      expect(handleStream).toHaveBeenCalledOnce();
+      expect(session.getPortableTransformationMetadata()).toBeNull();
+    }
+  );
+
+  test("keeps a native SSE request and every response frame unchanged", async () => {
+    const provider = { ...makeProvider(), codexMultiAgentV2Mode: "native" as const };
+    const session = makeSession(provider, { stream: true });
+    const upstreamText = [
+      ": native-heartbeat\r\n",
+      "id: native-1\r\n",
+      "event: response.output_item.added\r\n",
+      `data: ${JSON.stringify({
+        type: "response.output_item.added",
+        output_index: 0,
+        item: {
+          id: "native_item",
+          type: "function_call",
+          call_id: "native_call",
+          namespace: "collaboration",
+          name: "spawn_agent",
+          arguments: "{}",
+        },
+      })}\r\n\r\n`,
+      "data: [DONE]\n\n",
+    ].join("");
+    vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode").mockImplementationOnce(
+      async () =>
+        new Response(upstreamText, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        })
+    );
+
+    const { doForward } = ProxyForwarder as unknown as {
+      doForward: (session: ProxySession, provider: Provider, baseUrl: string) => Promise<Response>;
+    };
+    const upstreamResponse = await doForward(session, provider, provider.url);
+    vi.spyOn(ProxyResponseHandler as never, "handleStream").mockImplementationOnce(
+      async (_session: ProxySession, response: Response) => response
+    );
+    const clientResponse = await ProxyResponseHandler.dispatch(session, upstreamResponse);
+
+    await expect(clientResponse.text()).resolves.toBe(upstreamText);
+    expect(session.getPortableTransformationMetadata()).toBeNull();
+  });
+
   test("fatal compatibility errors neither reach upstream nor select another Provider", async () => {
     const provider = makeProvider();
     const session = makeSession(provider, {

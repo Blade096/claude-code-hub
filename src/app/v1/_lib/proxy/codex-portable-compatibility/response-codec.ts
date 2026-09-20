@@ -1,9 +1,11 @@
 import { PortableCompatibilityError } from "./errors";
 import { isRecord } from "./guards";
+import { transformPortableSseResponse } from "./sse-transform";
 import {
   PORTABLE_COLLABORATION_ACTIONS,
   PORTABLE_COLLABORATION_NAMESPACE,
   type PortableCollaborationAction,
+  type PortableResponseRestoreState,
   type PortableToolIdentityMapping,
   type PortableTransformationMetadata,
 } from "./types";
@@ -89,12 +91,21 @@ function resolveMapping(
   return matches[0];
 }
 
+type RestoredFunctionCall = {
+  identity: string;
+  restored: boolean;
+};
+
+function canonicalIdentity(namespace: string | null, name: string): string {
+  return `${namespace ?? ""}\u0000${name}`;
+}
+
 function restoreFunctionCall(
   item: Record<string, unknown>,
   metadata: PortableTransformationMetadata,
   fieldPath: string
-): boolean {
-  if (item.type !== "function_call" && item.type !== "custom_tool_call") return false;
+): RestoredFunctionCall | null {
+  if (item.type !== "function_call" && item.type !== "custom_tool_call") return null;
 
   if (Object.hasOwn(item, "namespace") && typeof item.namespace !== "string") {
     throw new PortableCompatibilityError("malformed_response", {
@@ -123,7 +134,7 @@ function restoreFunctionCall(
         providerId: metadata.providerId,
       });
     }
-    return false;
+    return { identity: canonicalIdentity(namespace, name), restored: false };
   }
   if (namespace === null && name.startsWith(`${ORIGINAL_COLLABORATION_NAMESPACE}__`)) {
     const originalName = name.slice(ORIGINAL_COLLABORATION_NAMESPACE.length + 2);
@@ -140,7 +151,10 @@ function restoreFunctionCall(
           providerId: metadata.providerId,
         });
       }
-      return false;
+      return {
+        identity: canonicalIdentity(ORIGINAL_COLLABORATION_NAMESPACE, originalName),
+        restored: false,
+      };
     }
   }
 
@@ -160,7 +174,9 @@ function restoreFunctionCall(
     actionName = name;
   }
 
-  if (style === null) return false;
+  if (style === null) {
+    return { identity: canonicalIdentity(namespace, name), restored: false };
+  }
   if (!actionName) {
     throw new PortableCompatibilityError("malformed_response", {
       fieldPath: `${fieldPath}.name`,
@@ -182,13 +198,83 @@ function restoreFunctionCall(
     item.namespace = mapping.originalNamespace;
     item.name = mapping.originalName;
   }
-  return true;
+  return {
+    identity: canonicalIdentity(mapping.originalNamespace, mapping.originalName),
+    restored: true,
+  };
+}
+
+function callKeys(item: Record<string, unknown>, outputIndex?: unknown): string[] {
+  const keys: string[] = [];
+  if (typeof item.id === "string" && item.id.length > 0) keys.push(`item:${item.id}`);
+  if (typeof item.call_id === "string" && item.call_id.length > 0) {
+    keys.push(`call:${item.call_id}`);
+  }
+  if (typeof outputIndex === "number" && Number.isInteger(outputIndex) && outputIndex >= 0) {
+    keys.push(`output:${outputIndex}`);
+  }
+  return keys;
+}
+
+function registerCallIdentity(
+  state: PortableResponseRestoreState,
+  keys: string[],
+  identity: string,
+  metadata: PortableTransformationMetadata,
+  fieldPath: string
+): void {
+  if (keys.length === 0) {
+    throw new PortableCompatibilityError("malformed_response", {
+      fieldPath,
+      providerId: metadata.providerId,
+    });
+  }
+  const existingBindings = new Set(
+    keys.map((key) => state.callIdentities.get(key)).filter((value) => value !== undefined)
+  );
+  if (existingBindings.size > 1) {
+    throw new PortableCompatibilityError("response_identity_mismatch", {
+      fieldPath,
+      providerId: metadata.providerId,
+    });
+  }
+  const existingBinding = existingBindings.values().next().value;
+  const binding = existingBinding ?? { callToken: keys[0], toolIdentity: identity };
+  if (existingBinding !== undefined && existingBinding.toolIdentity !== identity) {
+    throw new PortableCompatibilityError("response_identity_mismatch", {
+      fieldPath,
+      providerId: metadata.providerId,
+    });
+  }
+  for (const key of keys) state.callIdentities.set(key, binding);
+}
+
+function requireKnownCallIdentity(
+  state: PortableResponseRestoreState,
+  keys: string[],
+  metadata: PortableTransformationMetadata,
+  fieldPath: string
+): void {
+  if (keys.length === 0) {
+    throw new PortableCompatibilityError("malformed_response", {
+      fieldPath,
+      providerId: metadata.providerId,
+    });
+  }
+  const bindings = keys.map((key) => state.callIdentities.get(key));
+  if (bindings.some((binding) => binding === undefined) || new Set(bindings).size !== 1) {
+    throw new PortableCompatibilityError("response_identity_mismatch", {
+      fieldPath,
+      providerId: metadata.providerId,
+    });
+  }
 }
 
 function restoreOutputArray(
   output: unknown,
   metadata: PortableTransformationMetadata,
-  fieldPath: string
+  fieldPath: string,
+  state?: PortableResponseRestoreState
 ): number {
   if (!Array.isArray(output)) {
     throw new PortableCompatibilityError("malformed_response", {
@@ -196,7 +282,7 @@ function restoreOutputArray(
       providerId: metadata.providerId,
     });
   }
-  let restored = 0;
+  let restoredCount = 0;
   output.forEach((item, index) => {
     if (!isRecord(item)) {
       throw new PortableCompatibilityError("malformed_response", {
@@ -204,11 +290,113 @@ function restoreOutputArray(
         providerId: metadata.providerId,
       });
     }
-    if (restoreFunctionCall(item, metadata, `${fieldPath}.${index}`)) {
-      restored += 1;
+    const restoredCall = restoreFunctionCall(item, metadata, `${fieldPath}.${index}`);
+    if (restoredCall && state) {
+      registerCallIdentity(
+        state,
+        callKeys(item, index),
+        restoredCall.identity,
+        metadata,
+        `${fieldPath}.${index}`
+      );
+    }
+    if (restoredCall?.restored) {
+      restoredCount += 1;
     }
   });
-  return restored;
+  return restoredCount;
+}
+
+function eventCallKeys(event: Record<string, unknown>): string[] {
+  const keys: string[] = [];
+  if (typeof event.item_id === "string" && event.item_id.length > 0) {
+    keys.push(`item:${event.item_id}`);
+  }
+  if (typeof event.call_id === "string" && event.call_id.length > 0) {
+    keys.push(`call:${event.call_id}`);
+  }
+  if (
+    typeof event.output_index === "number" &&
+    Number.isInteger(event.output_index) &&
+    event.output_index >= 0
+  ) {
+    keys.push(`output:${event.output_index}`);
+  }
+  return keys;
+}
+
+export function createPortableResponseRestoreState(): PortableResponseRestoreState {
+  return { callIdentities: new Map() };
+}
+
+export function restorePortableCompatibilityEventPayload(
+  payload: unknown,
+  metadata: PortableTransformationMetadata,
+  state: PortableResponseRestoreState
+): { payload: unknown; restoredCount: number } {
+  if (!isRecord(payload) || typeof payload.type !== "string") {
+    throw new PortableCompatibilityError("malformed_response", {
+      fieldPath: "event",
+      providerId: metadata.providerId,
+    });
+  }
+  validateMappings(metadata);
+
+  const restoredPayload = structuredClone(payload);
+  const eventType = restoredPayload.type;
+
+  if (eventType === "response.output_item.added" || eventType === "response.output_item.done") {
+    if (!isRecord(restoredPayload.item)) {
+      throw new PortableCompatibilityError("malformed_response", {
+        fieldPath: "event.item",
+        providerId: metadata.providerId,
+      });
+    }
+    const restoredCall = restoreFunctionCall(restoredPayload.item, metadata, "event.item");
+    if (!restoredCall) return { payload: restoredPayload, restoredCount: 0 };
+
+    const keys = [
+      ...callKeys(restoredPayload.item, restoredPayload.output_index),
+      ...eventCallKeys(restoredPayload),
+    ];
+    registerCallIdentity(state, [...new Set(keys)], restoredCall.identity, metadata, "event.item");
+    return { payload: restoredPayload, restoredCount: restoredCall.restored ? 1 : 0 };
+  }
+
+  if (
+    eventType === "response.function_call_arguments.delta" ||
+    eventType === "response.function_call_arguments.done"
+  ) {
+    const valueKey = eventType === "response.function_call_arguments.delta" ? "delta" : "arguments";
+    if (typeof restoredPayload[valueKey] !== "string") {
+      throw new PortableCompatibilityError("malformed_response", {
+        fieldPath: `event.${valueKey}`,
+        providerId: metadata.providerId,
+      });
+    }
+    requireKnownCallIdentity(state, eventCallKeys(restoredPayload), metadata, "event.item_id");
+    return { payload: restoredPayload, restoredCount: 0 };
+  }
+
+  if (eventType === "response.completed") {
+    if (!isRecord(restoredPayload.response)) {
+      throw new PortableCompatibilityError("malformed_response", {
+        fieldPath: "event.response",
+        providerId: metadata.providerId,
+      });
+    }
+    return {
+      payload: restoredPayload,
+      restoredCount: restoreOutputArray(
+        restoredPayload.response.output,
+        metadata,
+        "event.response.output",
+        state
+      ),
+    };
+  }
+
+  return { payload: restoredPayload, restoredCount: 0 };
 }
 
 export function restorePortableCompatibilityPayload(
@@ -249,10 +437,40 @@ export function restorePortableCompatibilityPayload(
 
 export async function restorePortableCompatibilityResponse(
   response: Response,
-  metadata: PortableTransformationMetadata
+  metadata: PortableTransformationMetadata,
+  lifecycle: { onFinalize?: () => void } = {}
 ): Promise<Response> {
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  if (contentType.includes("text/event-stream")) {
+    const state = createPortableResponseRestoreState();
+    let restoredCount = 0;
+    let failed = false;
+    return transformPortableSseResponse(response, {
+      transformJson(payload) {
+        const restored = restorePortableCompatibilityEventPayload(payload, metadata, state);
+        restoredCount += restored.restoredCount;
+        return { payload: restored.payload, changed: restored.restoredCount > 0 };
+      },
+      onFailure(error) {
+        failed = true;
+        metadata.responseRestore = "failed";
+        metadata.audit.responseRestore = "failed";
+        metadata.audit.errorCode =
+          error instanceof PortableCompatibilityError
+            ? error.compatibilityCode
+            : "malformed_response";
+      },
+      onFinalize() {
+        if (!failed) {
+          metadata.responseRestore = restoredCount > 0 ? "restored" : "not_needed";
+          metadata.audit.responseRestore = metadata.responseRestore;
+        }
+        lifecycle.onFinalize?.();
+      },
+    });
+  }
+
   try {
-    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
     if (!contentType.includes("application/json") && !contentType.includes("+json")) {
       throw new PortableCompatibilityError("malformed_response", {
         fieldPath: "response.content_type",
@@ -286,5 +504,7 @@ export async function restorePortableCompatibilityResponse(
     metadata.audit.errorCode =
       error instanceof PortableCompatibilityError ? error.compatibilityCode : "malformed_response";
     throw error;
+  } finally {
+    lifecycle.onFinalize?.();
   }
 }

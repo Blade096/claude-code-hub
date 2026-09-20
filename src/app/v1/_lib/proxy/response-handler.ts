@@ -1336,11 +1336,9 @@ export class ProxyResponseHandler {
 
     const portableMetadata = session.getPortableTransformationMetadata?.() ?? null;
     if (portableMetadata) {
-      try {
-        fixedResponse = await restorePortableCompatibilityResponse(fixedResponse, portableMetadata);
-      } finally {
-        session.clearPortableTransformationMetadata?.();
-      }
+      fixedResponse = await restorePortableCompatibilityResponse(fixedResponse, portableMetadata, {
+        onFinalize: () => session.clearPortableTransformationMetadata?.(),
+      });
     }
 
     const contentType = fixedResponse.headers.get("content-type") || "";

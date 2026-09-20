@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { getCachedSystemSettings } from "@/lib/config";
 import type { Provider } from "@/types/provider";
 import { isCodexMultiAgentV2Request } from "../codex-multi-agent-v2-gate";
@@ -32,6 +33,12 @@ type CollaborationToolTarget = {
   namespace: Record<string, unknown>;
   path: string;
   tool: Record<string, unknown>;
+};
+
+type ToolRewriteResult = {
+  mappings: PortableToolIdentityMapping[];
+  paths: string[];
+  transformations: PortableTransformation[];
 };
 
 function isCollaborationAction(value: unknown): value is PortableCollaborationAction {
@@ -174,11 +181,7 @@ function collectCollaborationToolTargets(
 function rewriteCollaborationTools(
   request: Record<string, unknown>,
   providerId: number
-): {
-  mappings: PortableToolIdentityMapping[];
-  paths: string[];
-  transformations: PortableTransformation[];
-} {
+): ToolRewriteResult {
   const targets = collectCollaborationToolTargets(request, providerId);
   const namespaces = new Set<Record<string, unknown>>();
   const actions = new Set<PortableCollaborationAction>();
@@ -209,6 +212,21 @@ function rewriteCollaborationTools(
   transformations.push("collaboration_namespace");
 
   return { mappings, paths: targets.map((target) => target.path), transformations };
+}
+
+function hasPreparedPortableNamespace(request: Record<string, unknown>): boolean {
+  return collectToolContainers(request).some((container) =>
+    container.tools.some(
+      (tool) =>
+        isRecord(tool) &&
+        tool.type === "namespace" &&
+        tool.name === PORTABLE_COLLABORATION_NAMESPACE
+    )
+  );
+}
+
+function fingerprintPreparedRequest(request: Record<string, unknown>): string {
+  return createHash("sha256").update(JSON.stringify(request)).digest("hex");
 }
 
 function isOpaqueContent(value: string): boolean {
@@ -286,6 +304,55 @@ function resolveActualModel(session: ProxySession): string | null {
     : session.request.model;
 }
 
+function createTransformationMetadata(
+  session: ProxySession,
+  provider: Provider,
+  toolResult: ToolRewriteResult,
+  inputPaths: string[],
+  preparedRequest: Record<string, unknown>
+): PortableTransformationMetadata {
+  const transformations = [...toolResult.transformations];
+  if (inputPaths.length > 0) transformations.push("agent_message_input");
+  const actualModel = resolveActualModel(session);
+  const audit = {
+    type: "codex_multi_agent_v2_portable" as const,
+    scope: "request" as const,
+    hit: true as const,
+    providerId: provider.id,
+    requestedModel: session.request.model,
+    actualModel,
+    transformations: [...transformations],
+    responseRestore: "pending" as const,
+    errorCode: null,
+  };
+  return {
+    version: 1,
+    providerId: provider.id,
+    requestFingerprint: fingerprintPreparedRequest(preparedRequest),
+    requestedModel: session.request.model,
+    actualModel,
+    toolMappings: toolResult.mappings,
+    transformations,
+    matchedPaths: [...toolResult.paths, ...inputPaths],
+    responseRestore: "pending",
+    audit,
+  };
+}
+
+function markPreparedRequest(
+  request: Record<string, unknown>,
+  metadata: PortableTransformationMetadata
+): void {
+  Object.defineProperty(request, PORTABLE_REQUEST_METADATA, {
+    value: metadata,
+    enumerable: false,
+  });
+}
+
+function setAttemptMetadata(session: ProxySession, metadata: PortableTransformationMetadata): void {
+  session.setPortableTransformationMetadata?.(metadata);
+}
+
 export async function preparePortableCompatibilityRequest({
   session,
   provider,
@@ -324,42 +391,39 @@ export async function preparePortableCompatibilityRequest({
         providerId: provider.id,
       });
     }
+    setAttemptMetadata(session, priorMetadata);
     return { request, metadata: priorMetadata };
+  }
+
+  if (hasPreparedPortableNamespace(request)) {
+    const metadata = session.getPortableTransformationMetadata?.() ?? null;
+    if (
+      !metadata ||
+      metadata.providerId !== provider.id ||
+      metadata.responseRestore !== "pending" ||
+      metadata.requestFingerprint !== fingerprintPreparedRequest(request)
+    ) {
+      throw new PortableCompatibilityError("name_collision", {
+        fieldPath: "tools",
+        providerId: provider.id,
+      });
+    }
+    markPreparedRequest(request, metadata);
+    return { request, metadata };
   }
 
   const prepared = structuredClone(request);
   const toolResult = rewriteCollaborationTools(prepared, provider.id);
   const inputResult = rewriteAgentMessages(prepared, provider.id);
-  const transformations = [...toolResult.transformations];
-  if (inputResult.changed) transformations.push("agent_message_input");
-
-  const audit = {
-    type: "codex_multi_agent_v2_portable" as const,
-    scope: "request" as const,
-    hit: true as const,
-    providerId: provider.id,
-    requestedModel: session.request.model,
-    actualModel: resolveActualModel(session),
-    transformations: [...transformations],
-    responseRestore: "pending" as const,
-    errorCode: null,
-  };
-  const metadata: PortableTransformationMetadata = {
-    version: 1,
-    providerId: provider.id,
-    requestedModel: session.request.model,
-    actualModel: resolveActualModel(session),
-    toolMappings: toolResult.mappings,
-    transformations,
-    matchedPaths: [...toolResult.paths, ...inputResult.paths],
-    responseRestore: "pending",
-    audit,
-  };
-
-  Object.defineProperty(prepared, PORTABLE_REQUEST_METADATA, {
-    value: metadata,
-    enumerable: false,
-  });
+  const metadata = createTransformationMetadata(
+    session,
+    provider,
+    toolResult,
+    inputResult.paths,
+    prepared
+  );
+  markPreparedRequest(prepared, metadata);
+  setAttemptMetadata(session, metadata);
 
   return { request: prepared, metadata };
 }

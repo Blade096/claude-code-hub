@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   PortableCompatibilityError,
   preparePortableCompatibilityRequest,
+  type PortableTransformationMetadata,
 } from "@/app/v1/_lib/proxy/codex-portable-compatibility";
 import type { ProxySession } from "@/app/v1/_lib/proxy/session";
 import type { Provider } from "@/types/provider";
@@ -72,6 +73,7 @@ function makeRequest(overrides: Record<string, unknown> = {}): Record<string, un
 }
 
 function makeSession(message: Record<string, unknown>): ProxySession {
+  let portableMetadata: PortableTransformationMetadata | null = null;
   return {
     originalFormat: "response",
     requestUrl: new URL("https://proxy.example.com/v1/responses"),
@@ -79,6 +81,10 @@ function makeSession(message: Record<string, unknown>): ProxySession {
     userAgent: "Codex Desktop/1.2.3",
     request: { message, model: "requested-model" },
     getCurrentModel: () => "actual-model",
+    getPortableTransformationMetadata: () => portableMetadata,
+    setPortableTransformationMetadata: (metadata: PortableTransformationMetadata | null) => {
+      portableMetadata = metadata;
+    },
   } as unknown as ProxySession;
 }
 
@@ -235,7 +241,7 @@ describe("Codex MultiAgentV2 portable request codec", () => {
     expect(JSON.stringify(result.metadata)).not.toContain("Implement the bounded worker task");
   });
 
-  test("handles additional_tools and is idempotent", async () => {
+  test("handles additional_tools and remains idempotent after copy-on-write cloning", async () => {
     const request = makeRequest({
       tools: undefined,
       input: [
@@ -252,16 +258,27 @@ describe("Codex MultiAgentV2 portable request codec", () => {
       provider: makeProvider(),
       request,
     });
+    const clonedRequest = structuredClone(first.request);
     const second = await preparePortableCompatibilityRequest({
       session,
       provider: makeProvider(),
-      request: first.request,
+      request: clonedRequest,
     });
 
     expect(second.request).toEqual(first.request);
+    expect(second.request).toBe(clonedRequest);
+    expect(second.metadata).toBe(first.metadata);
     expect(JSON.stringify(second.request)).not.toContain(
       "collaboration-optimize.collaboration-optimize"
     );
+
+    await expect(
+      preparePortableCompatibilityRequest({
+        session,
+        provider: { ...makeProvider(), id: 43 },
+        request: structuredClone(first.request),
+      })
+    ).rejects.toMatchObject({ compatibilityCode: "name_collision" });
   });
 
   test("converts single and mixed agent-message content without reordering other parts", async () => {

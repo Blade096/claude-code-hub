@@ -26,6 +26,7 @@ export type PortableTransformation =
 export type PortableTransformationMetadata = {
   version: 1;
   providerId: number;
+  requestFingerprint: string;
   requestedModel: string | null;
   actualModel: string | null;
   toolMappings: PortableToolIdentityMapping[];

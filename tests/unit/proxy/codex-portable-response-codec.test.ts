@@ -35,6 +35,7 @@ function metadata(
   return {
     version: 1,
     providerId: 42,
+    requestFingerprint: "fixture-request-fingerprint",
     requestedModel: "requested-model",
     actualModel: "actual-model",
     transformations: [...audit.transformations],

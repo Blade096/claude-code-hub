@@ -540,7 +540,13 @@ function extractUsage(payload: unknown): CompactionUsage {
     total_tokens: totalTokens,
     cached_tokens: extractCachedTokens(usage),
     cache_creation_tokens: extractCacheCreationTokens(usage),
-    cache_write_input_tokens: extractNestedCacheWriteTokens(usage),
+    // Match the ordinary response path: an explicit top-level creation bucket
+    // wins over the nested OpenAI-compatible fallback. Only the fallback is a
+    // known subset of input_tokens and therefore eligible for subtraction.
+    cache_write_input_tokens:
+      typeof usage?.cache_creation_input_tokens === "number"
+        ? 0
+        : extractNestedCacheWriteTokens(usage),
   };
 }
 

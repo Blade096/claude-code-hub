@@ -17,10 +17,13 @@ import {
   assertOperationalLogsClean,
   auditSessionIds,
   fetchUsageLogs,
+  fetchUsageItemForAudit,
   lifecycleCaseForRecovery,
   requireQualification,
   targetTerminalAudit,
   usageItems,
+  usageFromUsageItem,
+  validateInjectedFaultUsage,
   validateHttpNonStream,
   validateSuccessfulLifecycle,
 } from "./_helpers/portable-qualification-assertions";
@@ -87,6 +90,7 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
             config: qualification,
             audit,
             run: result.run,
+            usage: result.run.usage,
             result: "passed",
           }),
           secrets,
@@ -105,6 +109,12 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
         const result = await executeLifecycle(qualification, invocation, caseInfo);
         await assertNativeRootUsage(qualification, result.run, caseInfo.caseId, result.sentinels);
         const audit = validateSuccessfulLifecycle(caseInfo, target, result);
+        const usageItem = await fetchUsageItemForAudit(
+          qualification,
+          audit,
+          caseInfo.caseId,
+          result.sentinels
+        );
         await assertOperationalLogsClean(qualification.logPaths, [...secrets, ...result.sentinels]);
         await appendSafeEvidence(
           qualification.evidencePath,
@@ -113,6 +123,7 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
             config: qualification,
             audit,
             run: result.run,
+            usage: usageFromUsageItem(usageItem),
             result: "passed",
           }),
           secrets,
@@ -152,6 +163,15 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
           caseInfo.caseId,
           "the injected fault did not produce a failed audit for the target child Provider"
         );
+        const faultUsageItem = await fetchUsageItemForAudit(
+          qualification,
+          faultAudit,
+          caseInfo.caseId,
+          fault.sentinels
+        );
+        if (caseInfo.operation === "timeout" || caseInfo.operation === "upstream_error") {
+          validateInjectedFaultUsage(caseInfo, target, faultModel, faultAudit, faultUsageItem);
+        }
         if (caseInfo.operation === "cancellation") {
           requireQualification(
             fault.cancelled && !fault.timedOut,
@@ -163,6 +183,12 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
         const recoveryCase = lifecycleCaseForRecovery(caseInfo);
         const recovery = await executeLifecycle(qualification, invocation, recoveryCase);
         const recoveryAudit = validateSuccessfulLifecycle(recoveryCase, target, recovery);
+        const recoveryUsageItem = await fetchUsageItemForAudit(
+          qualification,
+          recoveryAudit,
+          recoveryCase.caseId,
+          recovery.sentinels
+        );
         const faultSessions = auditSessionIds(fault.audits);
         const recoverySessions = auditSessionIds(recovery.audits);
         requireQualification(
@@ -195,7 +221,14 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
             config: qualification,
             audit: faultAudit,
             run: fault.run,
+            usage: usageFromUsageItem(faultUsageItem),
             result: "passed",
+            stableErrorCode:
+              caseInfo.operation === "timeout"
+                ? "CLIENT_ABORTED"
+                : caseInfo.operation === "upstream_error"
+                  ? "HTTP_400_CLIENT_ERROR_NON_RETRYABLE"
+                  : faultAudit.errorCategory,
           }),
           secrets,
           fault.sentinels
@@ -207,6 +240,7 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
             config: qualification,
             audit: recoveryAudit,
             run: recovery.run,
+            usage: usageFromUsageItem(recoveryUsageItem),
             result: "passed",
           }),
           secrets,
@@ -293,6 +327,7 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
           config: qualification,
           audit: nativePreparationAudit,
           run,
+          usage: run.usage,
           result: "passed",
         }),
         secrets,

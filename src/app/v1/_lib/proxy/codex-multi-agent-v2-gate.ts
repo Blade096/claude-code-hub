@@ -125,10 +125,23 @@ function isOfficialCodexResponsesRequest(session: ProxySession): boolean {
   return detectClientFull(session, "codex-cli").matched;
 }
 
-export function isCodexMultiAgentV2Request(session: ProxySession): boolean {
+export function isCodexMultiAgentV2Request(
+  session: ProxySession,
+  message: Record<string, unknown> = session.request.message
+): boolean {
   return (
     isOfficialCodexResponsesRequest(session) &&
-    classifyCodexMultiAgentV2Request(session.request.message) === "valid"
+    classifyCodexMultiAgentV2Request(message) === "valid"
+  );
+}
+
+export function isMalformedCodexMultiAgentV2Request(
+  session: ProxySession,
+  message: Record<string, unknown> = session.request.message
+): boolean {
+  return (
+    isOfficialCodexResponsesRequest(session) &&
+    classifyCodexMultiAgentV2Request(message) === "malformed"
   );
 }
 
@@ -165,15 +178,15 @@ export class ProxyCodexMultiAgentV2Gate {
     const schema = classifyCodexMultiAgentV2Request(session.request.message);
     if (schema === "absent") return null;
 
-    const mode = resolveMode(session);
-    if (mode === "native") return null;
-
     if (schema === "malformed") {
       throw new PortableCompatibilityError("client_or_protocol_mismatch", {
         fieldPath: "tools",
         providerId: session.provider?.id,
       });
     }
+
+    const mode = resolveMode(session);
+    if (mode === "native") return null;
 
     if (mode === "disabled") {
       throw new PortableCompatibilityError("provider_disabled", {

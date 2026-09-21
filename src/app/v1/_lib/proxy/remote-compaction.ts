@@ -9,6 +9,8 @@ import { normalizeEndpointPath, V1_ENDPOINT_PATHS } from "./endpoint-paths";
  * 字符串回放，所以 token 必须自包含，不依赖 Redis 或任何跨实例状态。
  *
  * token 形态：`cch2.<base64url(JSON)>`，JSON 为 { v, s, m, t }。
+ * 这是 CCH 前缀的自包含编码封装，不提供加密、签名或鉴权保证；它只用于协议回放，
+ * 不能作为跨信任边界的真实性凭据。
  */
 
 export const REMOTE_COMPACTION_TOKEN_PREFIX = "cch2.";

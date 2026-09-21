@@ -164,6 +164,20 @@ describe("Codex MultiAgentV2 provider gate", () => {
     expect(mocks.getCachedSystemSettings).not.toHaveBeenCalled();
   });
 
+  test("fails closed for malformed collaboration schemas in native mode", async () => {
+    const malformed = collaborationNamespace();
+    malformed.tools[0]!.parameters.properties.message = {
+      type: "string",
+    } as { type: string; encrypted: boolean };
+
+    await expect(
+      ProxyCodexMultiAgentV2Gate.ensure(createSession("native", { tools: [malformed] }))
+    ).rejects.toMatchObject({
+      compatibilityCode: "client_or_protocol_mismatch",
+      providerId: 42,
+    });
+  });
+
   test("fails closed when valid and malformed collaboration namespaces are mixed", async () => {
     const malformed = { ...collaborationNamespace(), tools: "invalid" };
     const session = createSession("portable", {

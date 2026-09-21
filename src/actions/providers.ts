@@ -1838,6 +1838,7 @@ const CLAUDE_ONLY_FIELDS: ReadonlySet<ProviderBatchPatchField> = new Set([
 ]);
 
 const CODEX_ONLY_FIELDS: ReadonlySet<ProviderBatchPatchField> = new Set([
+  "codex_multi_agent_v2_mode",
   "codex_reasoning_effort_preference",
   "codex_reasoning_summary_preference",
   "codex_text_verbosity_preference",
@@ -1876,6 +1877,7 @@ const CLAUDE_ONLY_REPO_KEYS: ReadonlySet<keyof BatchProviderUpdates> = new Set([
 ]);
 
 const CODEX_ONLY_REPO_KEYS: ReadonlySet<keyof BatchProviderUpdates> = new Set([
+  "codexMultiAgentV2Mode",
   "codexReasoningEffortPreference",
   "codexReasoningSummaryPreference",
   "codexTextVerbosityPreference",

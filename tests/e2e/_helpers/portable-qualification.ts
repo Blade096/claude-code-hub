@@ -404,6 +404,8 @@ export function buildEvidence(input: {
   config: PortableQualificationConfig;
   audit?: PortableAudit | null;
   run: ParsedCodexRun;
+  /** Usage from the exact usage-log row identified by audit.requestId. */
+  usage?: QualificationUsage | null;
   result: QualificationResult;
   stableErrorCode?: string | null;
   actual?: {
@@ -436,7 +438,9 @@ export function buildEvidence(input: {
     requestId: audit?.requestId ?? null,
     sessionId: audit?.sessionId ?? run.threadId,
     responseId: audit?.responseId ?? null,
-    usage: run.usage,
+    // A root Codex CLI turn may orchestrate a child Provider request. Never label
+    // root CLI usage as child usage merely because a child audit was selected.
+    usage: Object.hasOwn(input, "usage") ? (input.usage ?? null) : audit ? null : run.usage,
     auditState: audit?.state ?? null,
     responseRestore: audit?.responseRestore ?? null,
     transformations: Array.isArray(audit?.transformations) ? [...audit.transformations] : [],

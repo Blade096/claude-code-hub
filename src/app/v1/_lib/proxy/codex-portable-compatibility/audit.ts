@@ -2,7 +2,7 @@ import type { Provider } from "@/types/provider";
 import type { CodexMultiAgentV2PortableSpecialSetting } from "@/types/special-settings";
 import { isWebsocketClientRequest } from "../../responses-ws/eligibility";
 import type { ProxySession } from "../session";
-import type { PortableCompatibilityError } from "./errors";
+import { PortableCompatibilityError } from "./errors";
 import type {
   PortableTransformation,
   PortableTransformationMetadata,
@@ -96,7 +96,14 @@ export function capturePortableResponseId(
         : typeof record.id === "string" && !record.type
           ? record.id
           : null;
-  if (candidate) metadata.audit.responseId = candidate;
+  if (!candidate) return;
+  if (metadata.audit.responseId && metadata.audit.responseId !== candidate) {
+    throw new PortableCompatibilityError("response_identity_mismatch", {
+      fieldPath: "response.id",
+      providerId: metadata.providerId,
+    });
+  }
+  metadata.audit.responseId = candidate;
 }
 
 export function markPortableResponseSucceeded(metadata: PortableTransformationMetadata): void {

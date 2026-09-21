@@ -4045,6 +4045,7 @@ export async function finalizeSyntheticResponseUsage(
       input_tokens: number;
       output_tokens: number;
       cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
     };
     errorMessage?: string;
     actualResponseModel: string | null;
@@ -4088,6 +4089,7 @@ export async function finalizeSyntheticResponseUsage(
       void SessionManager.updateSessionUsage(session.sessionId, {
         inputTokens: normalizedUsage.input_tokens,
         outputTokens: normalizedUsage.output_tokens,
+        cacheCreationInputTokens: normalizedUsage.cache_creation_input_tokens,
         cacheReadInputTokens: normalizedUsage.cache_read_input_tokens,
         costUsd: costUpdateResult.costUsd ?? undefined,
         status: details.statusCode >= 200 && details.statusCode < 300 ? "completed" : "error",
@@ -4103,6 +4105,7 @@ export async function finalizeSyntheticResponseUsage(
     statusCode: details.statusCode,
     inputTokens: normalizedUsage?.input_tokens,
     outputTokens: normalizedUsage?.output_tokens,
+    cacheCreationInputTokens: normalizedUsage?.cache_creation_input_tokens,
     cacheReadInputTokens: normalizedUsage?.cache_read_input_tokens,
     ttfbMs: session.ttfbMs ?? details.durationMs,
     providerChain: session.getProviderChain(),

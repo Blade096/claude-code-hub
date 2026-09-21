@@ -4,6 +4,7 @@ import type { Provider } from "@/types/provider";
 import {
   hasCodexMultiAgentV2ToolSchema,
   isCodexMultiAgentV2Request,
+  isMalformedCodexMultiAgentV2Request,
 } from "../codex-multi-agent-v2-gate";
 import type { ProxySession } from "../session";
 import { createPortableCompatibilityAudit } from "./audit";
@@ -385,35 +386,6 @@ export async function preparePortableCompatibilityRequest({
   if (session.isInternalCompactionRequest?.() === true) {
     return { request, metadata: null };
   }
-  const isMultiAgentV2 = isCodexMultiAgentV2Request(session);
-  const mode = provider.codexMultiAgentV2Mode ?? "native";
-
-  if (!isMultiAgentV2) {
-    return { request, metadata: null };
-  }
-  if (mode === "disabled") {
-    throw new PortableCompatibilityError("provider_disabled", { providerId: provider.id });
-  }
-
-  // The fake-streaming runner consumes the upstream body without passing it
-  // through the shared portable response restorer. This can only occur when a
-  // native fake-stream attempt switches Provider after the read-only preflight.
-  // Refuse that portable attempt before request transformation or dispatch.
-  if (session.isFakeStreamingAttempt?.() === true) {
-    throw new PortableCompatibilityError("provider_transport_unsupported", {
-      fieldPath: "transport.fake_streaming",
-      providerId: provider.id,
-    });
-  }
-
-  const settings = await getCachedSystemSettings();
-  if (!settings.enableCodexMultiAgentV2Compatibility) {
-    if (mode === "native") return { request, metadata: null };
-    throw new PortableCompatibilityError("feature_disabled", { providerId: provider.id });
-  }
-  if (mode === "native" && !hasCodexMultiAgentV2ToolSchema(request)) {
-    return { request, metadata: null };
-  }
   const priorMetadata = (request as MarkedPortableRequest)[PORTABLE_REQUEST_METADATA];
   if (priorMetadata) {
     if (priorMetadata.providerId !== provider.id) {
@@ -425,7 +397,42 @@ export async function preparePortableCompatibilityRequest({
     setAttemptMetadata(session, priorMetadata);
     return { request, metadata: priorMetadata };
   }
+  if (isMalformedCodexMultiAgentV2Request(session, request)) {
+    throw new PortableCompatibilityError("client_or_protocol_mismatch", {
+      fieldPath: "tools",
+      providerId: provider.id,
+    });
+  }
+  const isMultiAgentV2 = isCodexMultiAgentV2Request(session, request);
+  const isPreparedRetry =
+    !isMultiAgentV2 && isCodexMultiAgentV2Request(session) && hasPreparedPortableNamespace(request);
+  const mode = provider.codexMultiAgentV2Mode ?? "native";
 
+  if (!isMultiAgentV2 && !isPreparedRetry) {
+    return { request, metadata: null };
+  }
+  if (mode === "disabled") {
+    throw new PortableCompatibilityError("provider_disabled", { providerId: provider.id });
+  }
+
+  const settings = await getCachedSystemSettings();
+  if (!settings.enableCodexMultiAgentV2Compatibility) {
+    if (mode === "native") return { request, metadata: null };
+    throw new PortableCompatibilityError("feature_disabled", { providerId: provider.id });
+  }
+  if (mode === "native" && !hasCodexMultiAgentV2ToolSchema(request)) {
+    return { request, metadata: null };
+  }
+
+  // The fake-streaming runner consumes the upstream body without passing it
+  // through the shared portable response restorer. Only reject attempts that
+  // will actually transform the request under the effective feature settings.
+  if (session.isFakeStreamingAttempt?.() === true) {
+    throw new PortableCompatibilityError("provider_transport_unsupported", {
+      fieldPath: "transport.fake_streaming",
+      providerId: provider.id,
+    });
+  }
   if (hasPreparedPortableNamespace(request)) {
     const metadata = session.getPortableTransformationMetadata?.() ?? null;
     if (

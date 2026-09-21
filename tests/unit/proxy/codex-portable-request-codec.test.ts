@@ -525,6 +525,56 @@ describe("Codex MultiAgentV2 portable request codec", () => {
     expect(mocks.getCachedSystemSettings).toHaveBeenCalledOnce();
   });
 
+  test("keeps native fake streaming unchanged while the global switch is off", async () => {
+    mocks.getCachedSystemSettings.mockResolvedValueOnce({
+      enableCodexMultiAgentV2Compatibility: false,
+    });
+    const request = makeRequest();
+    const session = makeSession(request);
+    session.isFakeStreamingAttempt = () => true;
+
+    await expect(
+      preparePortableCompatibilityRequest({
+        session,
+        provider: makeProvider("native"),
+        request,
+      })
+    ).resolves.toEqual({ request, metadata: null });
+  });
+
+  test("rejects a malformed collaboration schema when an attempt is re-evaluated", async () => {
+    const namespace = spawnAgentNamespace();
+    namespace.tools[0]!.parameters.properties.message = {
+      type: "string",
+    } as { type: string; encrypted: boolean };
+    const request = makeRequest({ tools: [namespace], input: [] });
+
+    await expect(
+      preparePortableCompatibilityRequest({
+        session: makeSession(request),
+        provider: makeProvider(),
+        request,
+      })
+    ).rejects.toMatchObject({ compatibilityCode: "client_or_protocol_mismatch" });
+  });
+
+  test("validates the actual attempt body instead of the session's stale request body", async () => {
+    const original = makeRequest();
+    const namespace = spawnAgentNamespace();
+    namespace.tools[0]!.parameters.properties.message = {
+      type: "string",
+    } as { type: string; encrypted: boolean };
+    const actualAttempt = makeRequest({ tools: [namespace], input: [] });
+
+    await expect(
+      preparePortableCompatibilityRequest({
+        session: makeSession(original),
+        provider: makeProvider(),
+        request: actualAttempt,
+      })
+    ).rejects.toMatchObject({ compatibilityCode: "client_or_protocol_mismatch" });
+  });
+
   test("rechecks disabled mode and the global switch for the actual attempt", async () => {
     const disabledRequest = makeRequest();
     await expect(

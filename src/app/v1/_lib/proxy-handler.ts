@@ -20,6 +20,7 @@ import { ProxySession } from "./proxy/session";
 
 export async function handleProxyRequest(c: Context): Promise<Response> {
   let session: ProxySession | null = null;
+  let concurrentCountIncremented = false;
   let cachedSystemSettings: Awaited<ReturnType<typeof getCachedSystemSettings>> | null = null;
   try {
     session = await ProxySession.fromContext(c);
@@ -78,7 +79,7 @@ export async function handleProxyRequest(c: Context): Promise<Response> {
     if (session.originalFormat === "response") {
       await normalizeResponseInput(session);
       // 展开 CCH 自己生成的压缩标记，让后续整流器、敏感词与上游都能看到明文历史。
-      // 只处理本服务签名过的 token，原生 OpenAI 的 token 原样透传。
+      // 只处理带 CCH 前缀的自包含 token，原生 OpenAI 的 token 原样透传。
       const replayError = expandCompactionReplay(session);
       if (replayError) {
         return await attachSessionIdToErrorResponse(session.sessionId, replayError);
@@ -104,6 +105,7 @@ export async function handleProxyRequest(c: Context): Promise<Response> {
     // 9. 增加并发计数（在所有检查通过后，请求开始前）- 跳过 count_tokens
     if (session.sessionId && session.getEndpointPolicy().trackConcurrentRequests) {
       await SessionTracker.incrementConcurrentCount(session.sessionId);
+      concurrentCountIncremented = true;
     }
 
     // 10. 记录请求开始
@@ -162,7 +164,7 @@ export async function handleProxyRequest(c: Context): Promise<Response> {
     return ProxyResponses.buildError(500, "代理请求发生未知错误");
   } finally {
     // 11. 减少并发计数（确保无论成功失败都执行）- 跳过 count_tokens
-    if (session?.sessionId && session.getEndpointPolicy().trackConcurrentRequests) {
+    if (concurrentCountIncremented && session?.sessionId) {
       await SessionTracker.decrementConcurrentCount(session.sessionId);
     }
   }

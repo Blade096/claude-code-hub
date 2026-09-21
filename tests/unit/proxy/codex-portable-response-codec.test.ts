@@ -214,6 +214,26 @@ describe("Codex MultiAgentV2 portable response codec", () => {
     });
   });
 
+  test.each([
+    { namespace: "collaboration", name: "unknown_action" },
+    { name: "collaboration__unknown_action" },
+  ])("fails closed for an unmapped original collaboration identity", (identity) => {
+    expect(() =>
+      restorePortableCompatibilityPayload(
+        {
+          output: [
+            {
+              type: "function_call",
+              arguments: "{}",
+              ...identity,
+            },
+          ],
+        },
+        metadata()
+      )
+    ).toThrowError(expect.objectContaining({ compatibilityCode: "unknown_tool" }));
+  });
+
   test("fails closed when an encoded response has no mapping", () => {
     expect(() =>
       restorePortableCompatibilityPayload(
@@ -385,6 +405,40 @@ describe("Codex MultiAgentV2 portable response codec", () => {
       responseId: null,
     });
   });
+
+  test.each(["failed", "incomplete"])(
+    "does not audit a non-streaming %s response as restored",
+    async (status) => {
+      const state = metadata();
+      const payload = {
+        id: "resp_failed",
+        object: "response",
+        status,
+        output: [
+          {
+            type: "function_call",
+            namespace: "collaboration-optimize",
+            name: "spawn_agent",
+            arguments: "{}",
+          },
+        ],
+      };
+      const response = await restorePortableCompatibilityResponse(
+        new Response(JSON.stringify(payload), {
+          headers: { "content-type": "application/json" },
+        }),
+        state
+      );
+
+      await expect(response.json()).resolves.toEqual(payload);
+      expect(state.responseRestore).toBe("not_needed");
+      expect(state.audit).toMatchObject({
+        state: "failed",
+        responseRestore: "not_needed",
+        responseId: "resp_failed",
+      });
+    }
+  );
 
   test("fails closed on non-JSON and invalid JSON responses", async () => {
     const nonJsonState = metadata();

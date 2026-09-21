@@ -33,6 +33,7 @@ const h = vi.hoisted(() => ({
   earlyResponse: null as Response | null,
   forwardResponse: new Response("ok", { status: 200 }),
   dispatchedResponse: null as Response | null,
+  compactionResponse: null as Response | null,
 
   endpointFormat: null as string | null,
   trackerCalls: [] as string[],
@@ -80,6 +81,10 @@ vi.mock("@/app/v1/_lib/proxy/response-handler", () => ({
   ProxyResponseHandler: {
     dispatch: async () => h.dispatchedResponse ?? h.forwardResponse,
   },
+}));
+
+vi.mock("@/app/v1/_lib/proxy/remote-compaction-synthesizer", () => ({
+  tryRemoteCompactionSynthesis: async () => h.compactionResponse,
 }));
 
 vi.mock("@/app/v1/_lib/proxy/error-handler", () => ({
@@ -184,6 +189,26 @@ describe("handleProxyRequest - session id on errors", async () => {
     const res = await handleProxyRequest({} as any);
     expect(res.status).toBe(200);
     expect(h.trackerCalls).toEqual(["inc", "startRequest", "dec"]);
+  });
+
+  test("remote compaction early return does not decrement a concurrent count it never acquired", async () => {
+    h.fromContextError = null;
+    h.session.originalFormat = "response";
+    h.endpointFormat = "response";
+    h.trackerCalls.length = 0;
+    h.pipelineError = null;
+    h.earlyResponse = null;
+    h.compactionResponse = new Response("compacted", { status: 200 });
+    h.session.requestUrl = new URL("http://localhost/v1/responses");
+    h.session.getEndpointPolicy = () => resolveEndpointPolicy(h.session.requestUrl.pathname);
+    h.session.request = { model: "gpt", message: { input: [] } };
+    h.session.sessionId = "s_123";
+
+    const res = await handleProxyRequest({} as any);
+    h.compactionResponse = null;
+
+    expect(res.status).toBe(200);
+    expect(h.trackerCalls).toEqual([]);
   });
 
   test.each([

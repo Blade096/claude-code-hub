@@ -4936,6 +4936,7 @@ export class ProxyForwarder {
     target.forwardedRequestBody = source.forwardedRequestBody;
     target.setCacheTtlResolved(source.getCacheTtlResolved());
     target.setContext1mApplied(source.getContext1mApplied());
+    target.setPortableTransformationMetadata(source.getPortableTransformationMetadata());
 
     const sourceState = source as unknown as {
       providerChain: ProviderChainItem[];

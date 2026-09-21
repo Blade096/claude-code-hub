@@ -129,50 +129,41 @@ function restoreFunctionCall(
   const namespace = typeof item.namespace === "string" ? item.namespace : null;
   const name = item.name;
 
-  if (
-    namespace === ORIGINAL_COLLABORATION_NAMESPACE &&
-    metadata.toolMappings.some(
+  if (namespace === ORIGINAL_COLLABORATION_NAMESPACE) {
+    const mapped = metadata.toolMappings.some(
       (mapping) => mapping.originalNamespace === namespace && mapping.originalName === name
-    )
-  ) {
-    if (
-      !metadata.toolMappings.some(
-        (mapping) => mapping.originalNamespace === namespace && mapping.originalName === name
-      )
-    ) {
-      throw new PortableCompatibilityError("missing_mapping", {
-        fieldPath: `${fieldPath}.name`,
-        providerId: metadata.providerId,
-      });
+    );
+    if (!mapped) {
+      throw new PortableCompatibilityError(
+        isCollaborationAction(name) ? "missing_mapping" : "unknown_tool",
+        {
+          fieldPath: `${fieldPath}.name`,
+          providerId: metadata.providerId,
+        }
+      );
     }
     return { identity: canonicalIdentity(namespace, name), restored: false };
   }
   if (namespace === null && name.startsWith(`${ORIGINAL_COLLABORATION_NAMESPACE}__`)) {
     const originalName = name.slice(ORIGINAL_COLLABORATION_NAMESPACE.length + 2);
-    if (
-      metadata.toolMappings.some(
-        (mapping) =>
-          mapping.originalNamespace === ORIGINAL_COLLABORATION_NAMESPACE &&
-          mapping.originalName === originalName
-      )
-    ) {
-      if (
-        !metadata.toolMappings.some(
-          (mapping) =>
-            mapping.originalNamespace === ORIGINAL_COLLABORATION_NAMESPACE &&
-            mapping.originalName === originalName
-        )
-      ) {
-        throw new PortableCompatibilityError("missing_mapping", {
+    const mapped = metadata.toolMappings.some(
+      (mapping) =>
+        mapping.originalNamespace === ORIGINAL_COLLABORATION_NAMESPACE &&
+        mapping.originalName === originalName
+    );
+    if (!mapped) {
+      throw new PortableCompatibilityError(
+        isCollaborationAction(originalName) ? "missing_mapping" : "unknown_tool",
+        {
           fieldPath: `${fieldPath}.name`,
           providerId: metadata.providerId,
-        });
-      }
-      return {
-        identity: canonicalIdentity(ORIGINAL_COLLABORATION_NAMESPACE, originalName),
-        restored: false,
-      };
+        }
+      );
     }
+    return {
+      identity: canonicalIdentity(ORIGINAL_COLLABORATION_NAMESPACE, originalName),
+      restored: false,
+    };
   }
 
   let style: "structured" | "dot" | "double" | "omitted" | null = null;
@@ -500,6 +491,12 @@ export async function restorePortableCompatibilityResponse(
     };
     return transformPortableSseResponse(response, {
       transformJson(payload) {
+        if (terminal !== null) {
+          throw new PortableCompatibilityError("malformed_response", {
+            fieldPath: "event.after_terminal",
+            providerId: metadata.providerId,
+          });
+        }
         const restored = restorePortableCompatibilityEventPayload(payload, metadata, state);
         restoredCount += restored.restoredCount;
         if (isRecord(payload)) {
@@ -573,6 +570,34 @@ export async function restorePortableCompatibilityResponse(
     } catch {
       throw new PortableCompatibilityError("malformed_response", {
         fieldPath: "response.body",
+        providerId: metadata.providerId,
+      });
+    }
+
+    capturePortableResponseId(metadata, payload);
+    const payloadRecord = isRecord(payload) ? payload : null;
+    const nestedResponse =
+      payloadRecord && isRecord(payloadRecord.response) ? payloadRecord.response : null;
+    const responseStatus = nestedResponse?.status ?? payloadRecord?.status;
+    if (
+      responseStatus === "failed" ||
+      responseStatus === "incomplete" ||
+      responseStatus === "cancelled"
+    ) {
+      metadata.responseRestore = "not_needed";
+      metadata.audit.responseRestore = "not_needed";
+      markPortableUpstreamResponseFailed(metadata);
+      const headers = new Headers(response.headers);
+      headers.delete("content-length");
+      return new Response(JSON.stringify(payload), {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
+    }
+    if (typeof responseStatus === "string" && responseStatus !== "completed") {
+      throw new PortableCompatibilityError("malformed_response", {
+        fieldPath: nestedResponse ? "response.status" : "status",
         providerId: metadata.providerId,
       });
     }

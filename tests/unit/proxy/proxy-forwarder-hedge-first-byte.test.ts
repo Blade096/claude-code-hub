@@ -123,6 +123,7 @@ import { ModelRedirector } from "@/app/v1/_lib/proxy/model-redirector";
 import { ProxySession } from "@/app/v1/_lib/proxy/session";
 import { logger } from "@/lib/logger";
 import type { Provider } from "@/types/provider";
+import type { PortableTransformationMetadata } from "@/app/v1/_lib/proxy/codex-portable-compatibility";
 
 type AttemptRuntime = {
   clearResponseTimeout?: () => void;
@@ -408,6 +409,25 @@ describe("ProxyForwarder - first-byte hedge scheduling", () => {
       redirectedModel: minimaxRedirect,
       billingModel: requestedModel,
     });
+  });
+
+  test("syncs portable transformation metadata from the streaming hedge winner", () => {
+    const initial = createSession();
+    const winner = createSession();
+    const winnerMetadata = {
+      providerId: 2,
+      audit: { state: "request_transformed" },
+    } as unknown as PortableTransformationMetadata;
+    winner.setPortableTransformationMetadata(winnerMetadata);
+    initial.clearPortableTransformationMetadata();
+
+    (
+      ProxyForwarder as unknown as {
+        syncWinningAttemptSession: (target: ProxySession, source: ProxySession) => void;
+      }
+    ).syncWinningAttemptSession(initial, winner);
+
+    expect(initial.getPortableTransformationMetadata()).toBe(winnerMetadata);
   });
 
   test("shadow session should clone current model redirect snapshot instead of sharing it", () => {

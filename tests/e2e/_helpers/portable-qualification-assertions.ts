@@ -6,6 +6,7 @@ import {
   type PortableQualificationConfig,
   type QualificationCase,
   type QualificationProvider,
+  type QualificationUsage,
 } from "./portable-qualification";
 import type { HttpNonStreamResult, LifecycleResult } from "./portable-qualification-lifecycle";
 
@@ -110,7 +111,8 @@ export async function inspectPortableAudits(
   protectedValues: string[],
   minimumRelatedTerminalAudits = 1,
   requireTargetTerminalAudit = false,
-  allowActualModelMismatch = false
+  allowActualModelMismatch = false,
+  expectedResponseId: string | null = null
 ): Promise<PortableAudit[]> {
   const sessionIds = [run.threadId, ...run.relatedThreadIds].filter((value): value is string =>
     Boolean(value)
@@ -131,6 +133,9 @@ export async function inspectPortableAudits(
       inspected.push(providerLogs);
       audits = findPortableAudits(inspected);
     }
+    if (expectedResponseId) {
+      audits = audits.filter((item) => item.responseId === expectedResponseId);
+    }
     assertNoProtectedText(inspected, protectedValues);
     const terminal = audits.filter(
       (item) => item.state === "response_restored" || item.state === "failed"
@@ -147,7 +152,10 @@ export async function inspectPortableAudits(
     }
     await new Promise((resolveWait) => setTimeout(resolveWait, 1_000));
   }
-  return findPortableAudits(inspected);
+  const audits = findPortableAudits(inspected);
+  return expectedResponseId
+    ? audits.filter((item) => item.responseId === expectedResponseId)
+    : audits;
 }
 
 export function terminalAudit(audits: PortableAudit[]): PortableAudit | null {
@@ -246,6 +254,21 @@ export function validateSuccessfulLifecycle(
     caseInfo.caseId,
     "agent_message compatibility transformation was not audited"
   );
+  requireQualification(
+    restored.every((item) => item.sessionId === trace.childThreadId),
+    caseInfo.caseId,
+    "restored audits are not correlated to the isolated child thread"
+  );
+  requireQualification(
+    new Set(restored.map((item) => item.requestId)).size >= 2,
+    caseInfo.caseId,
+    "child lifecycle audits do not contain two distinct request ids"
+  );
+  requireQualification(
+    new Set(restored.map((item) => item.responseId)).size >= 2,
+    caseInfo.caseId,
+    "child lifecycle audits do not contain two distinct response ids"
+  );
   return restored[0]!;
 }
 
@@ -260,12 +283,22 @@ export function validateHttpNonStream(
     "HTTP non-stream request did not complete"
   );
   requireQualification(result.run.usage, caseInfo.caseId, "HTTP non-stream usage is missing");
+  requireQualification(
+    result.responseId,
+    caseInfo.caseId,
+    "HTTP non-stream response id is missing"
+  );
   const audit = terminalAudit(result.audits);
   requireQualification(audit, caseInfo.caseId, "HTTP non-stream terminal audit is missing");
   requireQualification(
     audit.requestedTransport === "http" && audit.actualTransport === "http",
     caseInfo.caseId,
     "HTTP non-stream request used a different transport"
+  );
+  requireQualification(
+    audit.responseId === result.responseId,
+    caseInfo.caseId,
+    "HTTP non-stream audit belongs to a different response"
   );
   requireQualification(
     audit.requestedProviderId === target.id &&
@@ -320,6 +353,37 @@ export function usageItems(value: unknown): Array<Record<string, unknown>> {
     : [];
 }
 
+export async function fetchUsageItemForAudit(
+  qualification: PortableQualificationConfig,
+  audit: PortableAudit,
+  caseId: string,
+  protectedValues: string[]
+): Promise<Record<string, unknown>> {
+  requireQualification(audit.sessionId, caseId, "portable audit session id is missing");
+  requireQualification(audit.requestId !== null, caseId, "portable audit request id is missing");
+  for (let attempt = 0; attempt < 15; attempt++) {
+    const inspected = await fetchUsageLogs(qualification, { sessionId: audit.sessionId });
+    assertNoProtectedText(inspected, protectedValues);
+    const matched = usageItems(inspected).find((item) => item.id === audit.requestId);
+    if (matched) return matched;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 1_000));
+  }
+  throw new Error(`Qualification ${caseId} failed: correlated usage-log row is missing.`);
+}
+
+function finiteNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+export function usageFromUsageItem(item: Record<string, unknown>): QualificationUsage {
+  return {
+    inputTokens: finiteNumber(item.inputTokens),
+    cachedInputTokens: finiteNumber(item.cacheReadInputTokens),
+    outputTokens: finiteNumber(item.outputTokens),
+    reasoningOutputTokens: 0,
+  };
+}
+
 export function usageItemMatchesProvider(
   item: Record<string, unknown>,
   providerId: number,
@@ -336,6 +400,57 @@ export function usageItemMatchesProvider(
       (entry as Record<string, unknown>).id === providerId &&
       (entry as Record<string, unknown>).name === providerName
   );
+}
+
+export function validateInjectedFaultUsage(
+  caseInfo: QualificationCase,
+  target: QualificationProvider,
+  targetModel: string,
+  audit: PortableAudit,
+  item: Record<string, unknown>
+): void {
+  requireQualification(
+    item.id === audit.requestId && item.sessionId === audit.sessionId,
+    caseInfo.caseId,
+    "fault usage row does not match the failed portable audit"
+  );
+  requireQualification(
+    usageItemMatchesProvider(item, target.id, target.name) &&
+      (item.model === targetModel || item.originalModel === targetModel),
+    caseInfo.caseId,
+    "fault usage row belongs to a different Provider or model"
+  );
+
+  if (caseInfo.operation === "timeout") {
+    requireQualification(
+      item.statusCode === 499 &&
+        item.errorMessage === "CLIENT_ABORTED" &&
+        audit.errorCategory === "compatibility_restore_failed",
+      caseInfo.caseId,
+      "timeout did not produce the expected 499/CLIENT_ABORTED portable failure"
+    );
+  }
+  if (caseInfo.operation === "upstream_error") {
+    const chain = Array.isArray(item.providerChain)
+      ? item.providerChain.filter(
+          (entry): entry is Record<string, unknown> =>
+            Boolean(entry) && typeof entry === "object" && !Array.isArray(entry)
+        )
+      : [];
+    requireQualification(
+      item.statusCode === 400 &&
+        audit.errorCategory === null &&
+        chain.some(
+          (entry) =>
+            entry.id === target.id &&
+            entry.name === target.name &&
+            entry.reason === "client_error_non_retryable" &&
+            entry.statusCode === 400
+        ),
+      caseInfo.caseId,
+      "upstream-error injection did not produce the expected Provider 400 classification"
+    );
+  }
 }
 
 export async function assertNativeRootUsage(

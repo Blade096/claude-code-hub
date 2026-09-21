@@ -7,9 +7,10 @@ import { RedisKVStore } from "@/lib/redis/redis-kv-store";
  *
  * Codex 在压缩流中断时会重发同一个压缩请求（最多两次）。摘要本身可能耗时十几秒，
  * 如果每次都重新调用上游，既费钱又容易在重试时再次超时。这里把已经生成好的结果
- * 按「会话 + 供应商 + 模型 + 历史」指纹缓存一小段时间，重试直接复用同一份 token。
+ * 按「认证主体 + 会话 + 供应商 + 模型 + 完整摘要请求」指纹缓存一小段时间，
+ * 重试直接复用同一份 token。
  *
- * 缓存只影响重试，不参与历史回放：token 本身是自包含的，Redis 丢了也能解密。
+ * 缓存只影响重试，不参与历史回放：token 本身是自包含编码，Redis 丢失也能展开。
  */
 
 export type CachedCompactionResult = {
@@ -27,7 +28,7 @@ export type CachedCompactionResult = {
 const CACHE_TTL_SECONDS = 900;
 /** 摘要调用的租期上限：锁最多占用这么久，之后允许其他实例重做。 */
 const LOCK_LEASE_MS = 120_000;
-/** 拿不到锁时最多等待已有结果的时间，超时就自己算，避免拖慢压缩。 */
+/** 拿不到锁时最多等待已有结果的时间，超时由调用方返回可重试失败。 */
 const LOCK_WAIT_MS = 5_000;
 const LOCK_POLL_INTERVAL_MS = 250;
 
@@ -121,20 +122,22 @@ function lockKey(fingerprint: string): string {
 }
 
 /**
- * 指纹必须对「同一次压缩重试」稳定：会话标识、供应商、模型和历史内容。
- * 历史用去掉 trigger 之后的 input，避免 trigger 位置差异影响指纹。
+ * 指纹必须对「同一次压缩重试」稳定，同时不能跨 API key 或摘要请求配置复用。
+ * 摘要请求已去掉 trigger，并包含 instructions/tools 等会影响输出的字段。
  */
 export function compactionFingerprint(parts: {
+  userId: number | null;
+  keyId: number | null;
   sessionId: string | null;
   providerId: number | null;
   model: string;
-  history: unknown;
+  summaryRequest: unknown;
 }): string {
   const hash = createHash("sha256");
   hash.update(
-    `${parts.sessionId ?? "anonymous"}\u0000${parts.providerId ?? "unknown"}\u0000${parts.model}\u0000`
+    `${parts.userId ?? "anonymous-user"}\u0000${parts.keyId ?? "anonymous-key"}\u0000${parts.sessionId ?? "anonymous-session"}\u0000${parts.providerId ?? "unknown-provider"}\u0000${parts.model}\u0000`
   );
-  hash.update(JSON.stringify(parts.history ?? null));
+  hash.update(JSON.stringify(parts.summaryRequest ?? null));
   return hash.digest("hex");
 }
 
@@ -155,7 +158,7 @@ export async function writeCachedCompaction(
  * 尝试取得该压缩请求的执行权。
  *
  * 拿不到锁说明另一个实例/请求正在算同一份摘要，调用方应先用
- * {@link waitForCachedCompaction} 等一小会儿，等不到再自己算。
+ * {@link waitForCachedCompaction} 等待结果；等待超时也不能绕过锁重复计算。
  */
 export async function acquireCompactionLock(fingerprint: string): Promise<string | null> {
   const owner = randomUUID();
@@ -168,8 +171,8 @@ export async function releaseCompactionLock(fingerprint: string, owner: string):
 }
 
 /**
- * 轮询等待他人写入的结果。等待窗口故意很短：摘要通常要十几秒，
- * 长时间等待会把压缩本身拖慢，等不到就自己算更划算。
+ * 轮询等待他人写入的结果。等待超时由调用方返回可重试失败，避免同一份摘要
+ * 被多个实例同时发送并重复计费。
  */
 export async function waitForCachedCompaction(
   fingerprint: string,

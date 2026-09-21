@@ -447,6 +447,23 @@ export function redactResponseBody(body: unknown): unknown {
   ) {
     result.delta = REDACTED_MARKER;
   }
+  if (
+    (eventType === "response.output_text.done" ||
+      eventType === "response.reasoning_summary_text.done") &&
+    typeof result.text === "string"
+  ) {
+    result.text = REDACTED_MARKER;
+  }
+  if (
+    (eventType === "response.content_part.added" || eventType === "response.content_part.done") &&
+    isPlainObject(result.part)
+  ) {
+    const part = { ...result.part };
+    if (typeof part.text === "string") {
+      part.text = REDACTED_MARKER;
+    }
+    result.part = part;
+  }
   if (eventType === "response.function_call_arguments.done" && "arguments" in result) {
     result.arguments = REDACTED_MARKER;
   }

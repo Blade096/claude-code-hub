@@ -203,6 +203,31 @@ describe("Apply Provider Batch Patch Engine", () => {
     );
   });
 
+  it("should only apply codex multi-agent mode to codex providers", async () => {
+    const providers = [
+      makeProvider(1, { providerType: "codex", codexMultiAgentV2Mode: "native" }),
+      makeProvider(2, { providerType: "claude", codexMultiAgentV2Mode: "native" }),
+    ];
+    findAllProvidersFreshMock.mockResolvedValue(providers);
+    updateProvidersBatchMock.mockResolvedValue(1);
+
+    const { preview, apply } = await setupPreviewAndApply([1, 2], {
+      codex_multi_agent_v2_mode: { set: "portable" },
+    });
+
+    expect(preview.data.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ providerId: 1, status: "changed" }),
+        expect.objectContaining({ providerId: 2, status: "skipped" }),
+      ])
+    );
+    expect(apply.ok).toBe(true);
+    expect(updateProvidersBatchMock).toHaveBeenCalledOnce();
+    expect(updateProvidersBatchMock).toHaveBeenCalledWith([1], {
+      codexMultiAgentV2Mode: "portable",
+    });
+  });
+
   it("should publish cache invalidation after successful write", async () => {
     findAllProvidersFreshMock.mockResolvedValue([makeProvider(1)]);
     updateProvidersBatchMock.mockResolvedValue(1);

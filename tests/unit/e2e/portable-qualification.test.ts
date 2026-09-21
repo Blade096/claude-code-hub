@@ -442,6 +442,26 @@ describe("portable qualification evidence safety", () => {
     expect(serialized).not.toContain("PORTABLE_TASK_SENTINEL");
   });
 
+  test("does not label root CLI usage as child Provider usage", () => {
+    const evidence = buildEvidence({
+      caseInfo: sampleCase(),
+      config,
+      audit: audit({ sessionId: "child-thread" }),
+      run: {
+        threadId: "root-thread",
+        relatedThreadIds: ["child-thread"],
+        usage: { inputTokens: 99, cachedInputTokens: 9, outputTokens: 8, reasoningOutputTokens: 7 },
+        finalMessage: null,
+        failed: false,
+        collabTools: [],
+        collabAgentMessages: [],
+      },
+      result: "passed",
+    });
+
+    expect(evidence.usage).toBeNull();
+  });
+
   test("fails closed if a protected value reaches an allowlisted field", () => {
     const evidence = buildEvidence({
       caseInfo: sampleCase(),
@@ -579,7 +599,7 @@ describe("portable qualification isolated rollout evidence", () => {
   const startedAt = Date.parse("2026-09-21T00:00:00.000Z");
   const sentinels = ["OLD_MARKER", "RECENT_MARKER", "LIVE_NONCE", "FOLLOWUP_NONCE"];
 
-  test("places the recent-history marker in the current parent turn", () => {
+  test("keeps the recent-history marker out of the current parent turn", () => {
     const prompt = buildLifecyclePrompt(
       { ...sampleCase(), historyMode: "recent" },
       {
@@ -590,12 +610,11 @@ describe("portable qualification isolated rollout evidence", () => {
         mode: "portable",
         upstreamErrorModel: "deepseek-error-fixture",
       },
-      sentinels[1]!,
       sentinels[2]!,
       sentinels[3]!
     );
 
-    expect(prompt).toContain(`Current-turn inherited history marker: ${sentinels[1]}.`);
+    expect(prompt).not.toContain(sentinels[1]);
     expect(prompt).toContain("fork_turns=1");
     expect(prompt).toContain("use its wait collaboration tool");
     expect(prompt).toContain("must not complete before acknowledging that nonce");

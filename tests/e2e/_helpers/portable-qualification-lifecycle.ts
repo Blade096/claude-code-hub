@@ -47,6 +47,7 @@ export type HttpNonStreamResult = {
   audits: PortableAudit[];
   sentinels: string[];
   status: number;
+  responseId: string | null;
 };
 
 export function randomMarker(label: string): string {
@@ -85,13 +86,11 @@ function historyForkValue(mode: QualificationCase["historyMode"]): string {
 export function buildLifecyclePrompt(
   caseInfo: QualificationCase,
   target: QualificationProvider,
-  recentMarker: string,
   liveNonce: string,
   followupNonce: string
 ): string {
   return [
     `Qualification case ${caseInfo.caseId}.`,
-    `Current-turn inherited history marker: ${recentMarker}.`,
     `Spawn exactly one ${target.kind} role agent with agent_type=${target.kind} and fork_turns=${historyForkValue(caseInfo.historyMode)}.`,
     "The spawn task must ask the child to report every inherited marker beginning PORTABLE_HISTORY_ without giving it any marker value, then use its wait collaboration tool until the parent's live nonce arrives; it must not complete before acknowledging that nonce.",
     `Immediately after spawn_agent returns, while the child is still running, call send_message with this live nonce: ${liveNonce}. Do not wait first.`,
@@ -140,7 +139,10 @@ export async function executeLifecycle(
 
   const second = await runCodexProcess(
     invocation,
-    [...resumeArgs(firstRun.threadId), "Establish one more completed root turn. Reply ACK only."],
+    [
+      ...resumeArgs(firstRun.threadId),
+      `Remember completed-turn marker ${recentMarker}. Reply ACK only.`,
+    ],
     home,
     qualification.caseTimeoutMs
   );
@@ -153,7 +155,7 @@ export async function executeLifecycle(
     invocation,
     [
       ...resumeArgs(firstRun.threadId, schemaPath),
-      buildLifecyclePrompt(caseInfo, target, recentMarker, liveNonce, followupNonce),
+      buildLifecyclePrompt(caseInfo, target, liveNonce, followupNonce),
     ],
     home,
     qualification.caseTimeoutMs,
@@ -245,6 +247,7 @@ export async function executeHttpNonStreamQualification(
     signal: AbortSignal.timeout(qualification.caseTimeoutMs),
   });
   const payload = (await response.json()) as Record<string, unknown>;
+  const responseId = typeof payload.id === "string" ? payload.id : null;
   const usage = payload.usage as Record<string, unknown> | undefined;
   const run: ParsedCodexRun = {
     threadId: null,
@@ -267,8 +270,17 @@ export async function executeHttpNonStreamQualification(
     collabTools: [],
     collabAgentMessages: [],
   };
-  const audits = await inspectPortableAudits(qualification, run, target, target.model, startedAt, [
-    sentinel,
-  ]);
-  return { run, audits, sentinels: [sentinel], status: response.status };
+  const audits = await inspectPortableAudits(
+    qualification,
+    run,
+    target,
+    target.model,
+    startedAt,
+    [sentinel],
+    1,
+    false,
+    false,
+    responseId
+  );
+  return { run, audits, sentinels: [sentinel], status: response.status, responseId };
 }

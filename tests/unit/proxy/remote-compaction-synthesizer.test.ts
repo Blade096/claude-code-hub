@@ -357,6 +357,38 @@ describe("remote compaction synthesis", () => {
     );
   });
 
+  it("persists cache-write usage reported by a compatible upstream", async () => {
+    const { session } = makeSession({ remoteCompactionV2: true, trackUsage: true });
+    sendMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          output: [{ content: [{ text: "summary" }] }],
+          usage: {
+            input_tokens: 1000,
+            output_tokens: 100,
+            total_tokens: 1100,
+            cache_creation_input_tokens: 300,
+            input_tokens_details: { cached_tokens: 400 },
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const response = await tryRemoteCompactionSynthesis(session);
+    await response!.text();
+
+    expect(updateDetailsMock).toHaveBeenCalledWith(
+      321,
+      expect.objectContaining({
+        inputTokens: 600,
+        outputTokens: 100,
+        cacheCreationInputTokens: 300,
+        cacheReadInputTokens: 400,
+      })
+    );
+  });
+
   it("restores the original session request after the summary call", async () => {
     const { session, internalCompactionCalls } = makeSession({ remoteCompactionV2: true });
     const originalMessage = session.request.message;
@@ -394,6 +426,63 @@ describe("remote compaction synthesis", () => {
     expect(internalCompactionCalls).toEqual([true, false]);
     expect(session.isInternalCompactionRequest()).toBe(false);
   });
+
+  it("does not persist or log the raw upstream error body", async () => {
+    const sentinel = "UPSTREAM_PRIVATE_ERROR_BODY_71C9";
+    const { session } = makeSession({ remoteCompactionV2: true, trackUsage: true });
+    sendMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: sentinel } }), { status: 500 })
+    );
+
+    const response = await tryRemoteCompactionSynthesis(session);
+    await response!.text();
+
+    const persistedAndLogged = JSON.stringify({
+      logs: (logger.error as unknown as { mock: { calls: unknown[][] } }).mock.calls,
+      details: updateDetailsMock.mock.calls,
+    });
+    expect(persistedAndLogged).not.toContain(sentinel);
+    expect(persistedAndLogged).toContain("remote_compaction_upstream_http_error:500");
+  });
+
+  it("does not persist or log raw details from a thrown forwarding error", async () => {
+    const sentinel = "FORWARDER_PRIVATE_ERROR_2D94";
+    const { session } = makeSession({ remoteCompactionV2: true, trackUsage: true });
+    sendMock.mockRejectedValue(new Error(`provider transport failed: ${sentinel}`));
+
+    const response = await tryRemoteCompactionSynthesis(session);
+    await response!.text();
+
+    const persistedAndLogged = JSON.stringify({
+      logs: (logger.error as unknown as { mock: { calls: unknown[][] } }).mock.calls,
+      details: updateDetailsMock.mock.calls,
+    });
+    expect(persistedAndLogged).not.toContain(sentinel);
+    expect(persistedAndLogged).toContain("remote_compaction_forward_error");
+  });
+
+  it.each(["failed", "incomplete"])(
+    "rejects a Responses summary with terminal status %s even when it contains text",
+    async (status) => {
+      const { session } = makeSession({ remoteCompactionV2: true });
+      sendMock.mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            object: "response",
+            status,
+            incomplete_details: status === "incomplete" ? { reason: "max_output_tokens" } : null,
+            output: [{ content: [{ text: "partial summary must not be accepted" }] }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      );
+
+      const response = await tryRemoteCompactionSynthesis(session);
+      const events = sseEvents(await response!.text());
+      expect(events.at(-1)?.event).toBe("response.failed");
+      expect(events.map((event) => event.event)).not.toContain("response.completed");
+    }
+  );
 
   it("fails when the upstream returns no usable text", async () => {
     const { session } = makeSession({ remoteCompactionV2: true });
@@ -491,6 +580,72 @@ describe("remote compaction synthesis", () => {
     ).toBe("CHECKPOINT 1");
   });
 
+  it("does not bill the upstream usage again when replaying a cached compaction", async () => {
+    sendMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          output: [{ content: [{ text: "bill once" }] }],
+          usage: { input_tokens: 100, output_tokens: 10, total_tokens: 110 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const first = makeSession({ remoteCompactionV2: true, trackUsage: true });
+    const firstResponse = await tryRemoteCompactionSynthesis(first.session);
+    await firstResponse!.text();
+    expect(updateCostMock).toHaveBeenCalledTimes(1);
+
+    const retry = makeSession({ remoteCompactionV2: true, trackUsage: true });
+    const retryResponse = await tryRemoteCompactionSynthesis(retry.session);
+    await retryResponse!.text();
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(updateCostMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse a cached result when instructions differ", async () => {
+    sendMock.mockResolvedValue(
+      new Response(JSON.stringify({ output: [{ content: [{ text: "summary" }] }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    );
+
+    const first = makeSession({ remoteCompactionV2: true });
+    const firstResponse = await tryRemoteCompactionSynthesis(first.session);
+    await firstResponse!.text();
+
+    const second = makeSession({ remoteCompactionV2: true });
+    (second.session.request.message as Record<string, unknown>).instructions =
+      "different system instructions";
+    const secondResponse = await tryRemoteCompactionSynthesis(second.session);
+    await secondResponse!.text();
+
+    expect(sendMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reuse a cached result across API keys", async () => {
+    sendMock.mockResolvedValue(
+      new Response(JSON.stringify({ output: [{ content: [{ text: "summary" }] }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    );
+
+    const first = makeSession({ remoteCompactionV2: true });
+    first.session.authState = { user: { id: 11 }, key: { id: 101 } } as never;
+    const firstResponse = await tryRemoteCompactionSynthesis(first.session);
+    await firstResponse!.text();
+
+    const second = makeSession({ remoteCompactionV2: true });
+    second.session.authState = { user: { id: 11 }, key: { id: 202 } } as never;
+    const secondResponse = await tryRemoteCompactionSynthesis(second.session);
+    await secondResponse!.text();
+
+    expect(sendMock).toHaveBeenCalledTimes(2);
+  });
+
   it("does not reuse a cached result for a different history", async () => {
     sendMock.mockResolvedValue(
       new Response(JSON.stringify({ output: [{ content: [{ text: "summary" }] }] }), {
@@ -576,7 +731,7 @@ describe("remote compaction synthesis", () => {
     ).toBe("CONCURRENT SUMMARY");
   });
 
-  it("computes locally when the lock is held and no result appears", async () => {
+  it("fails retryably when the lock is held and no result appears", async () => {
     sendMock.mockResolvedValue(
       new Response(JSON.stringify({ output: [{ content: [{ text: "own summary" }] }] }), {
         status: 200,
@@ -589,10 +744,30 @@ describe("remote compaction synthesis", () => {
     const response = await tryRemoteCompactionSynthesis(session);
     const body = await response!.text();
 
-    expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(body).toContain("response.completed");
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(body).toContain("response.failed");
     // 没抢到锁就不该释放别人的锁
     expect(lock.calls).toEqual(["acquire"]);
+  });
+
+  it("lets the forwarder apply model redirection exactly once", async () => {
+    const { session } = makeSession({ remoteCompactionV2: true });
+    session.provider!.modelRedirects = [
+      { matchType: "exact", source: "deepseek-v4-pro", target: "redirected-once" },
+      { matchType: "exact", source: "redirected-once", target: "redirected-twice" },
+    ];
+    session.getOriginalModel = () => null;
+
+    sendMock.mockImplementation(async (s: ProxySession) => {
+      expect((s.request.message as Record<string, unknown>).model).toBe("deepseek-v4-pro");
+      return new Response(JSON.stringify({ output: [{ content: [{ text: "summary" }] }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    const response = await tryRemoteCompactionSynthesis(session);
+    expect(await response!.text()).toContain("response.completed");
   });
 
   it("keeps the summary running when the client disconnects", async () => {

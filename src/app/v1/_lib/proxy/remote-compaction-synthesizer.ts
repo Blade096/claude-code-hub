@@ -7,7 +7,6 @@ import {
   buildCompactionSummaryInput,
   encodeCompactionSummary,
   isRemoteCompactionV2Request,
-  normalizeInputWithoutTrigger,
 } from "./remote-compaction";
 import {
   acquireCompactionLock,
@@ -45,6 +44,55 @@ const SUMMARY_TIMEOUT_MS = 120_000;
  */
 const PRESERVE_TOOLS_FOR_PROMPT_CACHE = true;
 
+function safeCompactionErrorCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  if (
+    /^remote_compaction_(?:upstream_(?:invalid_json|missing_summary|http_error:\d{3}|status:(?:failed|incomplete|invalid))|timeout)$/.test(
+      message
+    )
+  ) {
+    return message;
+  }
+
+  const record = asRecord(error);
+  const status = record?.statusCode ?? record?.status;
+  if (typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599) {
+    return `remote_compaction_forward_error:${status}`;
+  }
+  return "remote_compaction_forward_error";
+}
+
+function buildSummaryRequestBody(
+  requestBody: Record<string, unknown>,
+  requestedModel: string
+): Record<string, unknown> {
+  const summaryBody: Record<string, unknown> = {
+    // Forwarder owns model redirection. Sending the already-redirected model here would
+    // make chained redirect rules run a second time when getOriginalModel() is still empty.
+    model: requestedModel,
+    input: buildCompactionSummaryInput(requestBody.input),
+    tools:
+      PRESERVE_TOOLS_FOR_PROMPT_CACHE && Array.isArray(requestBody.tools) ? requestBody.tools : [],
+    stream: false,
+    store: false,
+    max_output_tokens: SUMMARY_MAX_OUTPUT_TOKENS,
+  };
+  if ("tool_choice" in requestBody) {
+    summaryBody.tool_choice = requestBody.tool_choice;
+  }
+  if ("parallel_tool_calls" in requestBody) {
+    summaryBody.parallel_tool_calls = requestBody.parallel_tool_calls;
+  }
+  if (typeof requestBody.instructions === "string" && requestBody.instructions.trim()) {
+    summaryBody.instructions = requestBody.instructions;
+  }
+  // 复用原请求的 prompt cache key，尽量命中同一个前缀缓存分片。
+  if (typeof requestBody.prompt_cache_key === "string" && requestBody.prompt_cache_key) {
+    summaryBody.prompt_cache_key = requestBody.prompt_cache_key;
+  }
+  return summaryBody;
+}
+
 /**
  * 命中远程压缩替代方案时返回完整的 SSE Response；未命中返回 null，
  * 让调用方继续走原有代理路径。
@@ -72,12 +120,14 @@ export async function tryRemoteCompactionSynthesis(
     ? ModelRedirector.getRedirectedModel(requestedModel, provider)
     : requestedModel;
 
-  const { items: historyWithoutTrigger } = normalizeInputWithoutTrigger(requestBody.input);
+  const summaryBody = buildSummaryRequestBody(requestBody, requestedModel);
   const fingerprint = compactionFingerprint({
+    userId: session.authState?.user?.id ?? session.messageContext?.user?.id ?? null,
+    keyId: session.authState?.key?.id ?? session.messageContext?.key?.id ?? null,
     sessionId: session.sessionId ?? null,
     providerId: provider.id ?? null,
     model: effectiveModel,
-    history: historyWithoutTrigger,
+    summaryRequest: summaryBody,
   });
 
   const cached = await readCachedCompaction(fingerprint);
@@ -101,10 +151,10 @@ export async function tryRemoteCompactionSynthesis(
   return buildStreamingCompactionResponse(
     () =>
       produceCompactionResult(session, {
-        requestBody,
         provider,
         effectiveModel,
         requestedModel,
+        summaryBody,
         fingerprint,
         startedAt,
         delivery,
@@ -159,10 +209,10 @@ type CompactionOutcome =
   | { ok: false; message: string };
 
 type CompactionProductionInputs = {
-  requestBody: Record<string, unknown>;
   provider: NonNullable<ProxySession["provider"]>;
   effectiveModel: string;
   requestedModel: string;
+  summaryBody: Record<string, unknown>;
   fingerprint: string;
   startedAt: number;
   delivery: DeliveryTracker;
@@ -177,10 +227,10 @@ async function produceCompactionResult(
   inputs: CompactionProductionInputs
 ): Promise<CompactionOutcome> {
   const {
-    requestBody,
     provider,
     effectiveModel,
     requestedModel,
+    summaryBody,
     fingerprint,
     startedAt,
     delivery,
@@ -202,11 +252,11 @@ async function produceCompactionResult(
         output_tokens: reused.outputTokens,
         total_tokens: reused.totalTokens,
         cached_tokens: reused.cachedTokens,
+        cache_creation_tokens: 0,
       };
       await finalizeCompactionRecord(session, {
         statusCode: 200,
         durationMs: Date.now() - startedAt,
-        usage: reusedUsage,
         model: reused.model,
         reused: true,
       });
@@ -218,10 +268,18 @@ async function produceCompactionResult(
         usage: reusedUsage,
       };
     }
-    logger.warn("[RemoteCompaction] Compaction lock held and no result yet; computing anyway", {
+    const errorMessage = "remote_compaction_lock_wait_timeout";
+    logger.warn("[RemoteCompaction] Compaction lock held and no result appeared before timeout", {
       providerId: provider.id,
       model: effectiveModel,
     });
+    await finalizeCompactionRecord(session, {
+      statusCode: 503,
+      durationMs: Date.now() - startedAt,
+      errorMessage,
+      model: effectiveModel,
+    });
+    return { ok: false, message: errorMessage };
   }
 
   // 下面两处 return 都必须释放锁，否则后续同名请求只能等到租期结束。
@@ -230,29 +288,6 @@ async function produceCompactionResult(
       await releaseCompactionLock(fingerprint, lockOwner);
     }
   };
-
-  const summaryBody: Record<string, unknown> = {
-    model: effectiveModel,
-    input: buildCompactionSummaryInput(requestBody.input),
-    tools:
-      PRESERVE_TOOLS_FOR_PROMPT_CACHE && Array.isArray(requestBody.tools) ? requestBody.tools : [],
-    stream: false,
-    store: false,
-    max_output_tokens: SUMMARY_MAX_OUTPUT_TOKENS,
-  };
-  if ("tool_choice" in requestBody) {
-    summaryBody.tool_choice = requestBody.tool_choice;
-  }
-  if ("parallel_tool_calls" in requestBody) {
-    summaryBody.parallel_tool_calls = requestBody.parallel_tool_calls;
-  }
-  if (typeof requestBody.instructions === "string" && requestBody.instructions.trim()) {
-    summaryBody.instructions = requestBody.instructions;
-  }
-  // 复用原请求的 prompt cache key，尽量命中同一个前缀缓存分片。
-  if (typeof requestBody.prompt_cache_key === "string" && requestBody.prompt_cache_key) {
-    summaryBody.prompt_cache_key = requestBody.prompt_cache_key;
-  }
 
   logger.info("[RemoteCompaction] Synthesizing compaction summary", {
     providerId: provider.id,
@@ -268,7 +303,7 @@ async function produceCompactionResult(
     summaryText = result.text;
     usage = result.usage;
   } catch (error) {
-    const message = error instanceof Error ? error.message : "摘要生成失败";
+    const message = safeCompactionErrorCode(error);
     logger.error("[RemoteCompaction] Summary request failed", {
       providerId: provider.id,
       providerName: provider.name,
@@ -351,12 +386,12 @@ async function replayCachedCompaction(
     output_tokens: cached.outputTokens,
     total_tokens: cached.totalTokens,
     cached_tokens: cached.cachedTokens,
+    cache_creation_tokens: 0,
   };
 
   await finalizeCompactionRecord(session, {
     statusCode: 200,
     durationMs: Date.now() - startedAt,
-    usage,
     model: cached.model,
     reused: true,
   });
@@ -372,6 +407,7 @@ type CompactionUsage = {
   output_tokens: number;
   total_tokens: number;
   cached_tokens: number;
+  cache_creation_tokens: number;
 };
 
 async function runSummaryRequest(
@@ -406,19 +442,27 @@ async function runSummaryRequest(
     const raw = await response.text();
 
     if (response.status >= 400) {
-      throw new Error(`上游返回 ${response.status}: ${raw.slice(0, 300)}`);
+      throw new Error(`remote_compaction_upstream_http_error:${response.status}`);
     }
 
     let payload: unknown;
     try {
       payload = JSON.parse(raw);
     } catch {
-      throw new Error(`上游返回的不是 JSON: ${raw.slice(0, 200)}`);
+      throw new Error("remote_compaction_upstream_invalid_json");
+    }
+
+    const payloadRecord = asRecord(payload);
+    const responseStatus = payloadRecord?.status;
+    if (typeof responseStatus === "string" && responseStatus !== "completed") {
+      const safeStatus =
+        responseStatus === "failed" || responseStatus === "incomplete" ? responseStatus : "invalid";
+      throw new Error(`remote_compaction_upstream_status:${safeStatus}`);
     }
 
     const text = extractSummaryText(payload);
     if (!text) {
-      throw new Error("上游没有返回可用的摘要文本");
+      throw new Error("remote_compaction_upstream_missing_summary");
     }
 
     return { text, usage: extractUsage(payload) };
@@ -426,7 +470,7 @@ async function runSummaryRequest(
     // 内部 deadline 触发的 AbortError 在传输层会被包装成 499「客户端中断」，
     // 这里改抛明确的内部超时，避免日志与请求记录把超时写成客户端断开。
     if (internalAbort.signal.aborted) {
-      throw new Error("remote_compaction_timeout: 摘要请求超过内部超时");
+      throw new Error("remote_compaction_timeout");
     }
     throw error;
   } finally {
@@ -491,6 +535,7 @@ function extractUsage(payload: unknown): CompactionUsage {
     output_tokens: outputTokens,
     total_tokens: totalTokens,
     cached_tokens: extractCachedTokens(usage),
+    cache_creation_tokens: extractCacheCreationTokens(usage),
   };
 }
 
@@ -505,6 +550,21 @@ function extractCachedTokens(usage: Record<string, unknown> | null): number {
     numberOrZero(usage.prompt_cache_hit_tokens) ||
     numberOrZero(usage.cache_read_input_tokens) ||
     numberOrZero(details?.cached_tokens) ||
+    0
+  );
+}
+
+function extractCacheCreationTokens(usage: Record<string, unknown> | null): number {
+  if (!usage) return 0;
+  const creation = asRecord(usage.cache_creation);
+  return (
+    numberOrZero(usage.cache_creation_input_tokens) ||
+    numberOrZero(usage.cache_write_input_tokens) ||
+    numberOrZero(usage.prompt_cache_miss_tokens) ||
+    numberOrZero(usage.cache_creation_5m_input_tokens) +
+      numberOrZero(usage.cache_creation_1h_input_tokens) ||
+    numberOrZero(creation?.ephemeral_5m_input_tokens) +
+      numberOrZero(creation?.ephemeral_1h_input_tokens) ||
     0
   );
 }
@@ -540,6 +600,7 @@ async function finalizeCompactionRecord(
             input_tokens: details.usage.input_tokens,
             output_tokens: details.usage.output_tokens,
             cache_read_input_tokens: details.usage.cached_tokens,
+            cache_creation_input_tokens: details.usage.cache_creation_tokens,
           }
         : undefined,
       errorMessage: details.errorMessage,

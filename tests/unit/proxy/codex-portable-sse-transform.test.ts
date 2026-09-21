@@ -396,6 +396,44 @@ describe("Codex portable SSE response transform", () => {
     }
   );
 
+  test("fails closed when a completed terminal follows a failed terminal", async () => {
+    const state = metadata([]);
+    const body = [
+      { type: "response.failed", response: { id: "resp_1" } },
+      { type: "response.completed", response: { id: "resp_1", output: [] } },
+    ]
+      .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+      .join("");
+    const response = await restorePortableCompatibilityResponse(
+      chunkedResponse(body, [body.length]),
+      state
+    );
+    const text = await response.text();
+
+    expect(text).toContain("compatibility_restore_failed");
+    expect(state.responseRestore).toBe("failed");
+    expect(state.audit.state).toBe("failed");
+  });
+
+  test("fails closed when response ids change within one stream", async () => {
+    const state = metadata([]);
+    const body = [
+      { type: "response.created", response: { id: "resp_1" } },
+      { type: "response.completed", response: { id: "resp_2", output: [] } },
+    ]
+      .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+      .join("");
+    const response = await restorePortableCompatibilityResponse(
+      chunkedResponse(body, [body.length]),
+      state
+    );
+    const text = await response.text();
+
+    expect(text).toContain("compatibility_restore_failed");
+    expect(state.responseRestore).toBe("failed");
+    expect(state.audit.responseId).toBe("resp_1");
+  });
+
   test("cleans request lifecycle metadata when the client cancels", async () => {
     let upstreamCancelled = false;
     const upstream = new Response(

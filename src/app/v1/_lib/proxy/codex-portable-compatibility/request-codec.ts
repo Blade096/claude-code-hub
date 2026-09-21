@@ -269,7 +269,8 @@ function isOpaqueContent(value: string): boolean {
 
 function rewriteAgentMessages(
   request: Record<string, unknown>,
-  providerId: number
+  providerId: number,
+  options: { preserveOpaque: boolean } = { preserveOpaque: false }
 ): { changed: boolean; paths: string[] } {
   if (!Array.isArray(request.input)) return { changed: false, paths: [] };
 
@@ -279,19 +280,26 @@ function rewriteAgentMessages(
     if (!isRecord(item) || item.type !== "agent_message") return;
     const itemPath = `input.${itemIndex}`;
     if (item.role !== undefined && item.role !== "user") {
+      if (options.preserveOpaque) return;
       throw new PortableCompatibilityError("client_or_protocol_mismatch", {
         fieldPath: `${itemPath}.role`,
         providerId,
       });
     }
     if (!Array.isArray(item.content)) {
+      if (options.preserveOpaque) return;
       throw new PortableCompatibilityError("client_or_protocol_mismatch", {
         fieldPath: `${itemPath}.content`,
         providerId,
       });
     }
 
-    let readableTaskParts = 0;
+    const readableTaskParts: Array<{
+      part: Record<string, unknown>;
+      path: string;
+      text: string;
+    }> = [];
+    let hasOpaqueTaskPart = false;
     item.content.forEach((part, partIndex) => {
       if (!isRecord(part) || part.type !== "encrypted_content") return;
       const partPath = `${itemPath}.content.${partIndex}`;
@@ -300,24 +308,34 @@ function rewriteAgentMessages(
         Object.hasOwn(part, "text") ||
         isOpaqueContent(part.encrypted_content)
       ) {
+        if (options.preserveOpaque) {
+          hasOpaqueTaskPart = true;
+          return;
+        }
         throw new PortableCompatibilityError("opaque_content", {
           fieldPath: `${partPath}.encrypted_content`,
           providerId,
         });
       }
-      const text = part.encrypted_content;
-      delete part.encrypted_content;
-      part.type = "input_text";
-      part.text = text;
-      readableTaskParts += 1;
-      paths.push(partPath);
+      readableTaskParts.push({ part, path: partPath, text: part.encrypted_content });
     });
 
-    if (readableTaskParts === 0) {
+    // Never create a hybrid message containing both native ciphertext and
+    // portable plaintext. Native providers can still consume the untouched
+    // opaque envelope, while readable pseudo-ciphertext is normalized below.
+    if (hasOpaqueTaskPart) return;
+    if (readableTaskParts.length === 0) {
+      if (options.preserveOpaque) return;
       throw new PortableCompatibilityError("client_or_protocol_mismatch", {
         fieldPath: `${itemPath}.content`,
         providerId,
       });
+    }
+    for (const readablePart of readableTaskParts) {
+      delete readablePart.part.encrypted_content;
+      readablePart.part.type = "input_text";
+      readablePart.part.text = readablePart.text;
+      paths.push(readablePart.path);
     }
     item.type = "message";
     item.role = "user";
@@ -452,10 +470,9 @@ export async function preparePortableCompatibilityRequest({
 
   const prepared = structuredClone(request);
   const toolResult = rewriteCollaborationTools(prepared, provider.id, true);
-  const inputResult =
-    mode === "portable"
-      ? rewriteAgentMessages(prepared, provider.id)
-      : { changed: false, paths: [] };
+  const inputResult = rewriteAgentMessages(prepared, provider.id, {
+    preserveOpaque: mode === "native",
+  });
   const metadata = createTransformationMetadata(
     session,
     provider,

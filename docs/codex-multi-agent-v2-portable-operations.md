@@ -21,7 +21,7 @@ Portable 是协议兼容转换，不是解密。它只处理已经可读的 Code
 
 | 模式 | 行为 | 适用条件 |
 | --- | --- | --- |
-| `native` | 总开关开启时，根请求会准备 collaboration 工具 schema 与命名空间，使 Codex 后续生成可读的委派消息；原生 child envelope 不做 portable `agent_message` 改写 | OpenAI 原生端点，或已经完整支持 Codex MultiAgentV2 child 协议的端点 |
+| `native` | 总开关开启时，根请求会准备 collaboration 工具 schema 与命名空间，使 Codex 后续生成可读的委派消息；携带可读伪密文的 child envelope 会规范化为 `message/input_text`，真正不透明的原生密文保持原样透传 | OpenAI 原生端点，或已经完整支持 Codex MultiAgentV2 child 协议的端点 |
 | `portable` | 在总开关开启且请求被可靠识别后，转换协作结构并恢复响应 | 明确支持 Responses API，但不支持 Codex opaque wrapper 的第三方端点 |
 | `disabled` | 明确拒绝该 Provider 上的 MultiAgentV2 协作请求 | 未验收、数据策略不允许明文或已知不兼容的端点 |
 

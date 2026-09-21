@@ -510,7 +510,7 @@ describe("portable compatibility proxy seams", () => {
     expect(session.getSpecialSettings()).toHaveLength(1);
   });
 
-  test("prepares native root collaboration tools after compaction replay expansion", async () => {
+  test("prepares native collaboration tools and readable child input after compaction replay expansion", async () => {
     const provider = { ...makeProvider(), codexMultiAgentV2Mode: "native" as const } as Provider;
     const token = encodeCompactionSummary({
       summary: "Native checkpoint summary.",
@@ -554,13 +554,11 @@ describe("portable compatibility proxy seams", () => {
           content: [{ type: "input_text", text: expect.stringContaining("Native checkpoint") }],
         },
         {
-          type: "agent_message",
+          type: "message",
+          role: "user",
           content: [
             { type: "input_text", text: "Payload:\n" },
-            {
-              type: "encrypted_content",
-              encrypted_content: "Complete the seam test task.",
-            },
+            { type: "input_text", text: "Complete the seam test task." },
           ],
         },
       ],
@@ -569,6 +567,7 @@ describe("portable compatibility proxy seams", () => {
     expect(session.getPortableTransformationMetadata()?.transformations).toEqual([
       "spawn_agent_message_schema",
       "collaboration_namespace",
+      "agent_message_input",
     ]);
     expect(session.getSpecialSettings()).toHaveLength(1);
   });

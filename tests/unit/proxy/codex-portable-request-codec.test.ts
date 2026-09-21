@@ -348,6 +348,62 @@ describe("Codex MultiAgentV2 portable request codec", () => {
     ]);
   });
 
+  test("converts readable agent-message content for a native child after root schema preparation", async () => {
+    const request = makeRequest();
+    const before = structuredClone(request);
+
+    const result = await preparePortableCompatibilityRequest({
+      session: makeSession(request),
+      provider: makeProvider("native"),
+      request,
+    });
+    const input = result.request.input as Array<Record<string, unknown>>;
+
+    expect(input[0]).toMatchObject({
+      type: "message",
+      role: "user",
+      content: [
+        { type: "input_text", text: "Message Type: NEW_TASK\nPayload:\n" },
+        { type: "input_text", text: "Implement the bounded worker task." },
+      ],
+    });
+    expect(result.metadata?.transformations).toEqual([
+      "spawn_agent_message_schema",
+      "collaboration_namespace",
+      "agent_message_input",
+    ]);
+    expect(request).toEqual(before);
+  });
+
+  test("preserves an opaque native agent-message envelope without creating mixed content", async () => {
+    const opaque = `gAAAA${"A".repeat(120)}`;
+    const request = makeRequest({
+      input: [
+        {
+          type: "agent_message",
+          content: [
+            { type: "encrypted_content", encrypted_content: "Readable prefix." },
+            { type: "encrypted_content", encrypted_content: opaque },
+          ],
+        },
+      ],
+    });
+    const before = structuredClone(request);
+
+    const result = await preparePortableCompatibilityRequest({
+      session: makeSession(request),
+      provider: makeProvider("native"),
+      request,
+    });
+
+    expect(result.request.input).toEqual(before.input);
+    expect(result.metadata?.transformations).toEqual([
+      "spawn_agent_message_schema",
+      "collaboration_namespace",
+    ]);
+    expect(request).toEqual(before);
+  });
+
   test.each([
     [
       "wrong role",

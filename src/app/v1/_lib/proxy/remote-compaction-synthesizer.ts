@@ -567,9 +567,13 @@ function extractCachedTokens(usage: Record<string, unknown> | null): number {
 
 function extractCacheCreationTokens(usage: Record<string, unknown> | null): number {
   if (!usage) return 0;
+  // Presence matters here: an explicit zero is authoritative and must not
+  // fall through to a nested compatibility field.
+  if (typeof usage.cache_creation_input_tokens === "number") {
+    return numberOrZero(usage.cache_creation_input_tokens);
+  }
   const creation = asRecord(usage.cache_creation);
   return (
-    numberOrZero(usage.cache_creation_input_tokens) ||
     numberOrZero(usage.cache_write_input_tokens) ||
     extractNestedCacheWriteTokens(usage) ||
     numberOrZero(usage.cache_creation_5m_input_tokens) +

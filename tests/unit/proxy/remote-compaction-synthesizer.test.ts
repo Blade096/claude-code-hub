@@ -452,6 +452,38 @@ describe("remote compaction synthesis", () => {
     );
   });
 
+  it("preserves an explicit zero top-level cache creation bucket", async () => {
+    const { session } = makeSession({ remoteCompactionV2: true, trackUsage: true });
+    sendMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          output: [{ content: [{ text: "summary" }] }],
+          usage: {
+            input_tokens: 1000,
+            output_tokens: 100,
+            total_tokens: 1100,
+            cache_creation_input_tokens: 0,
+            input_tokens_details: { cached_tokens: 300, cache_write_tokens: 50 },
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const response = await tryRemoteCompactionSynthesis(session);
+    await response!.text();
+
+    expect(updateDetailsMock).toHaveBeenCalledWith(
+      321,
+      expect.objectContaining({
+        inputTokens: 700,
+        outputTokens: 100,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 300,
+      })
+    );
+  });
+
   it("treats DeepSeek prompt cache misses as ordinary input, not cache creation", async () => {
     const { session } = makeSession({ remoteCompactionV2: true, trackUsage: true });
     sendMock.mockResolvedValue(

@@ -24,6 +24,34 @@ describe("ProxyErrorHandler.handle - session id on errors", () => {
     expect(body.error.message).toBe("boom (cch_session_id: s_123)");
   });
 
+  test("does not return a proxy credential embedded in a database query error", async () => {
+    const credential = "cch-qualification-key-without-a-standard-prefix";
+    const session = {
+      sessionId: "s_credential_error",
+      messageContext: null,
+      startTime: Date.now(),
+      headers: new Headers({ Authorization: `Bearer ${credential}` }),
+      requestUrl: new URL("https://example.test/v1/responses"),
+      authState: null,
+      getProviderChain: () => [],
+      getCurrentModel: () => null,
+      getContext1mApplied: () => false,
+      getGroupCostMultiplier: () => 1,
+      provider: null,
+    } as any;
+
+    const res = await ProxyErrorHandler.handle(
+      session,
+      new Error(`Failed query: select * from keys where key = $1 params: ${credential}`)
+    );
+    const text = await res.text();
+
+    expect(res.status).toBe(500);
+    expect(text).not.toContain(credential);
+    expect(text).not.toContain("select * from keys");
+    expect(text).toContain("代理请求发生未知错误");
+  });
+
   test("keeps fixed-window rate-limit headers while removing X-RateLimit-Type", async () => {
     const session = {
       sessionId: "s_123",

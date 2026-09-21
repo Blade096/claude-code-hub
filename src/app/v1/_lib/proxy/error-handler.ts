@@ -18,6 +18,7 @@ import {
   portableAuditCorrelation,
   recordPortableFailureAudit,
 } from "./codex-portable-compatibility";
+import { getSafeProxyClientErrorMessage, sanitizeProxyErrorMessage } from "./error-sanitizer";
 import { attachSessionIdToErrorResponse } from "./error-session-id";
 import {
   ALL_PROVIDERS_UNAVAILABLE_MESSAGE,
@@ -247,6 +248,13 @@ export class ProxyErrorHandler {
       clientErrorMessage = "代理请求发生未知错误";
       logErrorMessage = "代理请求发生未知错误";
     }
+
+    clientErrorMessage = getSafeProxyClientErrorMessage(
+      session,
+      clientErrorMessage,
+      "代理请求发生未知错误"
+    );
+    logErrorMessage = sanitizeProxyErrorMessage(session, logErrorMessage);
 
     // 后备方案：如果状态码仍是 500，尝试从 provider chain 中提取最后一次实际请求的状态码
     if (statusCode === 500) {

@@ -4,6 +4,7 @@ import { logger } from "@/lib/logger";
 import { ProxyStatusTracker } from "@/lib/proxy-status-tracker";
 import { SessionTracker } from "@/lib/session-tracker";
 import { ProxyErrorHandler } from "./proxy/error-handler";
+import { buildProxyErrorLogDetails } from "./proxy/error-sanitizer";
 import { attachSessionIdToErrorResponse } from "./proxy/error-session-id";
 import { ProxyError } from "./proxy/errors";
 import { tryFakeStreamingPath } from "./proxy/fake-streaming/proxy-integration";
@@ -149,7 +150,7 @@ export async function handleProxyRequest(c: Context): Promise<Response> {
 
     return finalResponse;
   } catch (error) {
-    logger.error("Proxy handler error:", error);
+    logger.error("Proxy handler error", buildProxyErrorLogDetails(session, error));
     if (session) {
       return await ProxyErrorHandler.handle(session, error);
     }

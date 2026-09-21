@@ -500,14 +500,17 @@ export class ProxySession {
 
   addSpecialSetting(setting: SpecialSetting): void {
     if (setting.type === "codex_multi_agent_v2_portable") {
-      const existing = this.specialSettings.find(
-        (candidate): candidate is typeof setting =>
+      const existingIndex = this.specialSettings.findIndex(
+        (candidate) =>
           candidate.type === setting.type &&
           candidate.requestId === setting.requestId &&
           candidate.sessionId === setting.sessionId
       );
-      if (existing) {
-        Object.assign(existing, setting);
+      if (existingIndex >= 0) {
+        // Each retry owns fresh transformation metadata. Keep the stored
+        // special setting bound to that exact audit object so later terminal
+        // mutations are persisted instead of updating a detached retry copy.
+        this.specialSettings[existingIndex] = setting;
         return;
       }
     }

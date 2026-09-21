@@ -79,6 +79,7 @@ vi.mock("@/app/v1/_lib/proxy/response-fixer", () => ({
 }));
 
 import { resolveEndpointPolicy } from "@/app/v1/_lib/proxy/endpoint-policy";
+import { ProxyError } from "@/app/v1/_lib/proxy/errors";
 import { handleProxyRequest } from "@/app/v1/_lib/proxy-handler";
 import { ProxyForwarder } from "@/app/v1/_lib/proxy/forwarder";
 import { ProxyResponseHandler } from "@/app/v1/_lib/proxy/response-handler";
@@ -647,6 +648,32 @@ describe("portable compatibility proxy seams", () => {
     expect(fetch).not.toHaveBeenCalled();
     expect(selectAlternative).not.toHaveBeenCalled();
     expect(session.getPortableTransformationMetadata()).toBeNull();
+  });
+
+  test("finalizes the portable audit when an upstream attempt throws before dispatch", async () => {
+    const provider = makeProvider();
+    provider.maxRetryAttempts = 2;
+    const session = makeSession(provider);
+    const fetch = vi
+      .spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode")
+      .mockRejectedValue(new ProxyError("upstream rejected the model", 400));
+    vi.spyOn(ProxyForwarder as never, "selectAlternative").mockResolvedValueOnce(null);
+
+    await expect(ProxyForwarder.send(session)).rejects.toBeInstanceOf(Error);
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(session.getPortableTransformationMetadata()).toBeNull();
+    expect(session.getSpecialSettings()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "codex_multi_agent_v2_portable",
+          state: "failed",
+          actualTransport: "http",
+          responseRestore: "not_needed",
+          errorCategory: null,
+        }),
+      ])
+    );
   });
 
   test("rejects portable WebSocket before eligibility, upstream WS, or HTTP dispatch", async () => {

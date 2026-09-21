@@ -118,6 +118,7 @@ Harness 不会把原始 Codex JSONL、stderr、tool arguments 或上游 body 写
 | `compatibility_opaque_content` | Portable 输入仍含 CCH 无法读取的 opaque content | 改用 `native` endpoint，或停止在该 Provider 上使用 portable |
 | `compatibility_name_collision` | 请求工具名与 portable 保留名称冲突 | 检查请求工具声明；不要手工猜测或重写保留名称 |
 | `compatibility_restore_failed` | 上游响应缺失映射、名称无法唯一恢复，或返回结构与本次 request/turn metadata 不一致 | 按 response id 检查 endpoint 协议实现；确认没有并发串线 |
+| `compatibility_transport_unsupported` | Portable Provider 收到 WebSocket 等未支持传输 | 改用 HTTP non-stream 或 HTTP SSE；不要为 GLM、DeepSeek portable Provider 启用 WebSocket 或自动兜底 |
 
 取消、超时和普通上游 4xx/5xx 还应核对下一条 recovery 记录。如果 recovery 的 session/response id 或 actual Provider 与 fault 记录相同，应视为 metadata 生命周期缺陷，不可继续放量。
 

@@ -453,6 +453,18 @@ export function validateInjectedFaultUsage(
   }
 }
 
+export function validateInjectedFaultProcess(
+  caseInfo: QualificationCase,
+  result: Pick<LifecycleResult, "cancelled" | "timedOut">
+): void {
+  if (caseInfo.operation !== "timeout") return;
+  requireQualification(
+    !result.timedOut && !result.cancelled,
+    caseInfo.caseId,
+    "Codex process-level timeout/cancellation cannot prove the target child idle-timeout path"
+  );
+}
+
 export async function assertNativeRootUsage(
   qualification: PortableQualificationConfig,
   run: ParsedCodexRun,

@@ -4936,7 +4936,12 @@ export class ProxyForwarder {
     target.forwardedRequestBody = source.forwardedRequestBody;
     target.setCacheTtlResolved(source.getCacheTtlResolved());
     target.setContext1mApplied(source.getContext1mApplied());
-    target.setPortableTransformationMetadata(source.getPortableTransformationMetadata());
+    const winningPortableMetadata = source.getPortableTransformationMetadata();
+    if (winningPortableMetadata) {
+      winningPortableMetadata.audit.requestId ??= target.messageContext?.id ?? null;
+      winningPortableMetadata.audit.sessionId ??= target.sessionId;
+    }
+    target.setPortableTransformationMetadata(winningPortableMetadata);
 
     const sourceState = source as unknown as {
       providerChain: ProviderChainItem[];

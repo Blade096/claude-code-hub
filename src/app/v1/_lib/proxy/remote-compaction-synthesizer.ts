@@ -253,6 +253,7 @@ async function produceCompactionResult(
         total_tokens: reused.totalTokens,
         cached_tokens: reused.cachedTokens,
         cache_creation_tokens: 0,
+        cache_write_input_tokens: 0,
       };
       await finalizeCompactionRecord(session, {
         statusCode: 200,
@@ -387,6 +388,7 @@ async function replayCachedCompaction(
     total_tokens: cached.totalTokens,
     cached_tokens: cached.cachedTokens,
     cache_creation_tokens: 0,
+    cache_write_input_tokens: 0,
   };
 
   await finalizeCompactionRecord(session, {
@@ -408,6 +410,8 @@ type CompactionUsage = {
   total_tokens: number;
   cached_tokens: number;
   cache_creation_tokens: number;
+  /** Cache-write tokens reported as a subset of input_tokens. */
+  cache_write_input_tokens: number;
 };
 
 async function runSummaryRequest(
@@ -536,6 +540,7 @@ function extractUsage(payload: unknown): CompactionUsage {
     total_tokens: totalTokens,
     cached_tokens: extractCachedTokens(usage),
     cache_creation_tokens: extractCacheCreationTokens(usage),
+    cache_write_input_tokens: extractNestedCacheWriteTokens(usage),
   };
 }
 
@@ -560,11 +565,22 @@ function extractCacheCreationTokens(usage: Record<string, unknown> | null): numb
   return (
     numberOrZero(usage.cache_creation_input_tokens) ||
     numberOrZero(usage.cache_write_input_tokens) ||
-    numberOrZero(usage.prompt_cache_miss_tokens) ||
+    extractNestedCacheWriteTokens(usage) ||
     numberOrZero(usage.cache_creation_5m_input_tokens) +
       numberOrZero(usage.cache_creation_1h_input_tokens) ||
     numberOrZero(creation?.ephemeral_5m_input_tokens) +
       numberOrZero(creation?.ephemeral_1h_input_tokens) ||
+    0
+  );
+}
+
+function extractNestedCacheWriteTokens(usage: Record<string, unknown> | null): number {
+  if (!usage) return 0;
+  const inputDetails = asRecord(usage.input_tokens_details);
+  const promptDetails = asRecord(usage.prompt_tokens_details);
+  return (
+    numberOrZero(inputDetails?.cache_write_tokens) ||
+    numberOrZero(promptDetails?.cache_write_tokens) ||
     0
   );
 }
@@ -601,6 +617,7 @@ async function finalizeCompactionRecord(
             output_tokens: details.usage.output_tokens,
             cache_read_input_tokens: details.usage.cached_tokens,
             cache_creation_input_tokens: details.usage.cache_creation_tokens,
+            cache_write_input_tokens: details.usage.cache_write_input_tokens,
           }
         : undefined,
       errorMessage: details.errorMessage,

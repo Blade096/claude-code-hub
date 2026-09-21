@@ -413,10 +413,11 @@ describe("ProxyForwarder - first-byte hedge scheduling", () => {
 
   test("syncs portable transformation metadata from the streaming hedge winner", () => {
     const initial = createSession();
+    initial.messageContext = { id: 123 } as ProxySession["messageContext"];
     const winner = createSession();
     const winnerMetadata = {
       providerId: 2,
-      audit: { state: "request_transformed" },
+      audit: { state: "request_transformed", requestId: null, sessionId: null },
     } as unknown as PortableTransformationMetadata;
     winner.setPortableTransformationMetadata(winnerMetadata);
     initial.clearPortableTransformationMetadata();
@@ -428,6 +429,8 @@ describe("ProxyForwarder - first-byte hedge scheduling", () => {
     ).syncWinningAttemptSession(initial, winner);
 
     expect(initial.getPortableTransformationMetadata()).toBe(winnerMetadata);
+    expect(winnerMetadata.audit.requestId).toBe(123);
+    expect(winnerMetadata.audit.sessionId).toBe("sess-hedge");
   });
 
   test("shadow session should clone current model redirect snapshot instead of sharing it", () => {

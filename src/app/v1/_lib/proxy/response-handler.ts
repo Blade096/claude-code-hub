@@ -4046,6 +4046,8 @@ export async function finalizeSyntheticResponseUsage(
       output_tokens: number;
       cache_read_input_tokens?: number;
       cache_creation_input_tokens?: number;
+      /** Cache-write tokens known to be included in input_tokens. */
+      cache_write_input_tokens?: number;
     };
     errorMessage?: string;
     actualResponseModel: string | null;
@@ -4056,12 +4058,13 @@ export async function finalizeSyntheticResponseUsage(
 
   let normalizedUsage: UsageMetrics | null = null;
   if (details.usage) {
+    const { cache_write_input_tokens: cacheWriteInputTokens, ...usageMetrics } = details.usage;
     normalizedUsage = normalizeUsageWithSwap(
-      adjustUsageForProviderType(
-        details.usage,
-        provider.providerType,
-        details.usage as Record<string, unknown>
-      ),
+      adjustUsageForProviderType(usageMetrics, provider.providerType, {
+        input_tokens_details: {
+          cache_write_tokens: cacheWriteInputTokens ?? 0,
+        },
+      }),
       session,
       provider.swapCacheTtlBilling
     );

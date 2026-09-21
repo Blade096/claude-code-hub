@@ -23,6 +23,7 @@ import {
   targetTerminalAudit,
   usageItems,
   usageFromUsageItem,
+  validateInjectedFaultProcess,
   validateInjectedFaultUsage,
   validateHttpNonStream,
   validateSuccessfulLifecycle,
@@ -151,6 +152,7 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
               ? { targetIdleTimeoutMs: 250 }
               : { targetModel: target.upstreamErrorModel ?? undefined };
         const fault = await executeLifecycle(qualification, invocation, caseInfo, faultOptions);
+        validateInjectedFaultProcess(caseInfo, fault);
         const faultModel = faultOptions.targetModel ?? target.model;
         const faultAudit = targetTerminalAudit(
           fault.audits,

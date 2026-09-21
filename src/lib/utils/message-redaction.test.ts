@@ -432,19 +432,20 @@ describe("message-redaction", () => {
       }
     );
 
-    test.each(["response.content_part.added", "response.content_part.done"])(
-      "redacts nested part text from %s events",
-      (type) => {
-        const sentinel = `PORTABLE_TASK_SENTINEL_${type}`;
-        const result = redactResponseBody({
-          type,
-          part: { type: "output_text", text: sentinel },
-        }) as { part: { text: string } };
+    test.each([
+      "response.content_part.added",
+      "response.content_part.done",
+      "response.reasoning_summary_part.done",
+    ])("redacts nested part text from %s events", (type) => {
+      const sentinel = `PORTABLE_TASK_SENTINEL_${type}`;
+      const result = redactResponseBody({
+        type,
+        part: { type: "output_text", text: sentinel },
+      }) as { part: { text: string } };
 
-        expect(result.part.text).toBe(REDACTED_MARKER);
-        expect(JSON.stringify(result)).not.toContain(sentinel);
-      }
-    );
+      expect(result.part.text).toBe(REDACTED_MARKER);
+      expect(JSON.stringify(result)).not.toContain(sentinel);
+    });
 
     test("should redact OpenAI choices[].message.content", () => {
       const body = {

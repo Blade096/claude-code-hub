@@ -389,6 +389,69 @@ describe("remote compaction synthesis", () => {
     );
   });
 
+  it("extracts nested cache-write tokens and excludes both cache subsets from input", async () => {
+    const { session } = makeSession({ remoteCompactionV2: true, trackUsage: true });
+    sendMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          output: [{ content: [{ text: "summary" }] }],
+          usage: {
+            input_tokens: 1000,
+            output_tokens: 100,
+            total_tokens: 1100,
+            input_tokens_details: { cached_tokens: 400, cache_write_tokens: 300 },
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const response = await tryRemoteCompactionSynthesis(session);
+    await response!.text();
+
+    expect(updateDetailsMock).toHaveBeenCalledWith(
+      321,
+      expect.objectContaining({
+        inputTokens: 300,
+        outputTokens: 100,
+        cacheCreationInputTokens: 300,
+        cacheReadInputTokens: 400,
+      })
+    );
+  });
+
+  it("treats DeepSeek prompt cache misses as ordinary input, not cache creation", async () => {
+    const { session } = makeSession({ remoteCompactionV2: true, trackUsage: true });
+    sendMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          output: [{ content: [{ text: "summary" }] }],
+          usage: {
+            input_tokens: 1000,
+            output_tokens: 100,
+            total_tokens: 1100,
+            prompt_cache_hit_tokens: 400,
+            prompt_cache_miss_tokens: 600,
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const response = await tryRemoteCompactionSynthesis(session);
+    await response!.text();
+
+    expect(updateDetailsMock).toHaveBeenCalledWith(
+      321,
+      expect.objectContaining({
+        inputTokens: 600,
+        outputTokens: 100,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 400,
+      })
+    );
+  });
+
   it("restores the original session request after the summary call", async () => {
     const { session, internalCompactionCalls } = makeSession({ remoteCompactionV2: true });
     const originalMessage = session.request.message;

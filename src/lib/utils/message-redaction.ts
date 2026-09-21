@@ -455,7 +455,9 @@ export function redactResponseBody(body: unknown): unknown {
     result.text = REDACTED_MARKER;
   }
   if (
-    (eventType === "response.content_part.added" || eventType === "response.content_part.done") &&
+    (eventType === "response.content_part.added" ||
+      eventType === "response.content_part.done" ||
+      eventType === "response.reasoning_summary_part.done") &&
     isPlainObject(result.part)
   ) {
     const part = { ...result.part };

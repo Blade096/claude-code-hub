@@ -25,6 +25,7 @@ import {
   isTargetChildAudit,
   targetTerminalAudit,
   usageItemMatchesProvider,
+  validateInjectedFaultProcess,
 } from "../../e2e/_helpers/portable-qualification-assertions";
 import { analyzeLifecycleRollouts } from "../../e2e/_helpers/portable-qualification-rollout";
 
@@ -93,6 +94,15 @@ function sampleCase(): QualificationCase {
     historyMode: "none",
     transport: "sse",
     expected: "success",
+  };
+}
+
+function timeoutCase(): QualificationCase {
+  return {
+    ...sampleCase(),
+    caseId: "deepseek_timeout_sse",
+    operation: "timeout",
+    expected: "failure",
   };
 }
 
@@ -252,6 +262,15 @@ describe("portable qualification evidence safety", () => {
     completeEnv(),
     repositoryRoot
   ) as PortableQualificationConfig;
+
+  test("rejects a process-level deadline as proof of the child idle-timeout fault", () => {
+    expect(() =>
+      validateInjectedFaultProcess(timeoutCase(), { cancelled: false, timedOut: true })
+    ).toThrow("process-level timeout/cancellation");
+    expect(() =>
+      validateInjectedFaultProcess(timeoutCase(), { cancelled: false, timedOut: false })
+    ).not.toThrow();
+  });
 
   test("extracts only portable audit records from nested usage-log responses", () => {
     const portable = audit();

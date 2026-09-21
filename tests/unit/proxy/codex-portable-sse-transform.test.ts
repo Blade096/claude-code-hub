@@ -461,8 +461,12 @@ describe("Codex portable SSE response transform", () => {
     await reader.cancel("client_cancelled");
 
     expect(upstreamCancelled).toBe(true);
-    expect(state.responseRestore).toBe("failed");
-    expect(state.audit.state).toBe("failed");
+    expect(state.responseRestore).toBe("not_needed");
+    expect(state.audit).toMatchObject({
+      state: "failed",
+      responseRestore: "not_needed",
+      errorCategory: null,
+    });
     expect(finalize).toHaveBeenCalledOnce();
   });
 
@@ -481,7 +485,7 @@ describe("Codex portable SSE response transform", () => {
     expect(finalize).toHaveBeenCalledOnce();
   });
 
-  test("turns an upstream stream error into a safe terminal error frame", async () => {
+  test("preserves an upstream stream error instead of misclassifying it as a restore failure", async () => {
     const privateUpstreamDetail = "private upstream socket detail";
     const state = metadata();
     const finalize = vi.fn();
@@ -496,11 +500,13 @@ describe("Codex portable SSE response transform", () => {
     const response = await restorePortableCompatibilityResponse(upstream, state, {
       onFinalize: finalize,
     });
-    const text = await response.text();
-
-    expect(text).toContain("compatibility_restore_failed");
-    expect(text).not.toContain(privateUpstreamDetail);
-    expect(state.responseRestore).toBe("failed");
+    await expect(response.text()).rejects.toThrow(privateUpstreamDetail);
+    expect(state.responseRestore).toBe("not_needed");
+    expect(state.audit).toMatchObject({
+      state: "failed",
+      responseRestore: "not_needed",
+      errorCategory: null,
+    });
     expect(finalize).toHaveBeenCalledOnce();
   });
 });

@@ -32,6 +32,7 @@ type SubAgentActivity = {
 
 type ParsedRollout = {
   toolCalls: ToolCall[];
+  allToolNames: string[];
   toolOutputs: Set<string>;
   activities: SubAgentActivity[];
   parentAgentMessages: string[];
@@ -56,6 +57,9 @@ export type CodexLifecycleTrace = {
   historyOldMarkerObserved: boolean;
   historyRecentMarkerObserved: boolean;
   toolArgumentsExcludeHistoryMarkers: boolean;
+  childObservedTools?: string[];
+  spawnTaskProhibitsTools?: boolean;
+  childReceivedToolProhibition?: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -116,6 +120,7 @@ function activityFromPayload(
 export function parseRolloutForQualification(jsonl: string, startedAt: number): ParsedRollout {
   const parsed: ParsedRollout = {
     toolCalls: [],
+    allToolNames: [],
     toolOutputs: new Set(),
     activities: [],
     parentAgentMessages: [],
@@ -138,6 +143,9 @@ export function parseRolloutForQualification(jsonl: string, startedAt: number): 
     const payload = event.payload;
 
     if (event.type === "response_item") {
+      if (payload.type === "function_call" && typeof payload.name === "string") {
+        parsed.allToolNames.push(payload.name);
+      }
       if (
         payload.type === "function_call" &&
         typeof payload.name === "string" &&
@@ -187,6 +195,10 @@ function stringArgument(call: ToolCall, key: string): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function containsToolProhibition(text: string): boolean {
+  return text.includes("wait_agent is the only tool") && text.includes("write_stdin");
+}
+
 export function analyzeLifecycleRollouts(options: {
   rootThread: StoredThread;
   childThread: StoredThread;
@@ -231,6 +243,7 @@ export function analyzeLifecycleRollouts(options: {
   const parentText = root.parentAgentMessages.join("\n");
   const childText = child.assistantMessages.join("\n");
   const childHistoryText = childHistory.allMessageTexts.join("\n");
+  const childCurrentText = child.allMessageTexts.join("\n");
   const expectedMarkers = expectedHistoryMarkers(historyMode, sentinels);
   const excludedMarkers = sentinels
     .slice(0, 2)
@@ -288,6 +301,11 @@ export function analyzeLifecycleRollouts(options: {
     toolArgumentsExcludeHistoryMarkers: actionCalls.every((call) =>
       sentinels.slice(0, 2).every((marker) => !call.argumentsText.includes(marker))
     ),
+    childObservedTools: child.allToolNames,
+    spawnTaskProhibitsTools: containsToolProhibition(
+      spawn ? (stringArgument(spawn, "message") ?? "") : ""
+    ),
+    childReceivedToolProhibition: containsToolProhibition(childCurrentText),
   };
 }
 

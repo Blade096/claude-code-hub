@@ -191,15 +191,25 @@ export function transformPortableSseResponse(
         }
       } catch (error) {
         if (!cancelled) {
-          hooks.onFailure(error);
-          try {
-            controller.enqueue(encoder.encode(safeErrorFrame(error, hooks)));
+          if (error instanceof PortableCompatibilityError) {
+            hooks.onFailure(error);
+            try {
+              controller.enqueue(encoder.encode(safeErrorFrame(error, hooks)));
+              closed = true;
+              controller.close();
+            } catch {
+              controller.error(error);
+            }
+            await reader.cancel("portable_response_restore_failed").catch(() => undefined);
+          } else {
+            // A reader failure is a transport/lifecycle failure, not evidence that
+            // the portable payload was malformed. Preserve it so the response
+            // handler can distinguish client cancellation from an upstream abort.
             closed = true;
-            controller.close();
-          } catch {
-            controller.error(error);
+            try {
+              controller.error(error);
+            } catch {}
           }
-          await reader.cancel("portable_response_restore_failed").catch(() => undefined);
         }
         finalize();
         releaseReader();

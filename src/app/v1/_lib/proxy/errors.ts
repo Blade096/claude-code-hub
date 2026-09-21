@@ -906,7 +906,7 @@ export function isEmptyResponseError(error: unknown): error is EmptyResponseErro
  *    → 不应重试（客户端已经不想要结果了）
  *    → 应立即返回错误
  *
- * 2. 不可重试的客户端输入错误（Prompt 超限、内容过滤、PDF 限制、Thinking 参数格式错误、参数缺失、非法请求）
+ * 2. 不可重试的客户端输入错误（Prompt 超限、内容过滤、PDF 限制、Thinking 参数格式错误、参数缺失、非法请求、确定性的模型名错误）
  *    → 客户端输入违反了 API 的硬性限制或安全策略
  *    → 不应计入熔断器（不是供应商故障）
  *    → 不应重试（重试也会失败）
@@ -937,6 +937,19 @@ export async function categorizeErrorAsync(error: Error): Promise<ErrorCategory>
   // These are always SYSTEM_ERROR regardless of message content
   if (isTransportError(error)) {
     return ErrorCategory.SYSTEM_ERROR;
+  }
+
+  // 上游已经明确给出允许的模型列表并拒绝当前模型名时，原样重试不会改变结果。
+  // 仅匹配这种带有“允许列表 + 实际传值”的确定性 400；其余 4xx 仍保留项目既有的
+  // 供应商重试/故障转移策略，且 forwarder 后续仍可先应用 reactive rectifier。
+  if (
+    error instanceof ProxyError &&
+    error.statusCode === 400 &&
+    /\bsupported api model names?\b[\s\S]*\bbut you passed\b/i.test(
+      extractErrorContentForDetection(error)
+    )
+  ) {
+    return ErrorCategory.NON_RETRYABLE_CLIENT_ERROR;
   }
 
   // 优先级 2: 不可重试的客户端输入错误检测（白名单模式）

@@ -8,7 +8,11 @@ import {
   type QualificationProvider,
   type QualificationUsage,
 } from "./portable-qualification";
-import type { HttpNonStreamResult, LifecycleResult } from "./portable-qualification-lifecycle";
+import type {
+  HttpNonStreamResult,
+  LifecycleResult,
+  UpstreamErrorProbeResult,
+} from "./portable-qualification-lifecycle";
 
 function usageLogUrl(
   qualification: PortableQualificationConfig,
@@ -179,10 +183,26 @@ export function validateSuccessfulLifecycle(
   target: QualificationProvider,
   result: LifecycleResult
 ): PortableAudit {
+  const traceSummary = result.trace
+    ? {
+        observedActions: result.trace.observedActions,
+        stateEdgeVerified: result.trace.stateEdgeVerified,
+        actionSequenceComplete: result.trace.actionSequenceComplete,
+        toolOutputsComplete: result.trace.toolOutputsComplete,
+        sendWhileRunning: result.trace.sendWhileRunning,
+        followupAfterCompletion: result.trace.followupAfterCompletion,
+        parentReceivedResults: result.trace.parentReceivedResults,
+        childReturnedLiveNonce: result.trace.childReturnedLiveNonce,
+        childReturnedFollowupNonce: result.trace.childReturnedFollowupNonce,
+        childObservedTools: result.trace.childObservedTools ?? [],
+        spawnTaskProhibitsTools: result.trace.spawnTaskProhibitsTools ?? false,
+        childReceivedToolProhibition: result.trace.childReceivedToolProhibition ?? false,
+      }
+    : null;
   requireQualification(
-    result.code === 0 && !result.cancelled,
+    result.code === 0 && !result.cancelled && !result.timedOut,
     caseInfo.caseId,
-    "CLI did not finish"
+    `CLI did not finish (code=${String(result.code)}, timedOut=${result.timedOut}, cancelled=${result.cancelled}, collaborationTools=${JSON.stringify(result.run.collabTools)}, trace=${JSON.stringify(traceSummary)})`
   );
   requireQualification(result.lifecycle, caseInfo.caseId, "structured lifecycle result is missing");
   const lifecycle = result.lifecycle;
@@ -202,12 +222,22 @@ export function validateSuccessfulLifecycle(
   requireQualification(
     trace.childReturnedLiveNonce && trace.childReturnedFollowupNonce && trace.parentReceivedResults,
     caseInfo.caseId,
-    "isolated child/parent rollouts did not contain both lifecycle results"
+    `isolated child/parent rollouts did not contain both lifecycle results (trace=${JSON.stringify(traceSummary)})`
   );
   requireQualification(
     trace.historyBoundaryMatches && trace.toolArgumentsExcludeHistoryMarkers,
     caseInfo.caseId,
     `isolated rollout did not prove the requested history boundary (old=${trace.historyOldMarkerObserved}, recent=${trace.historyRecentMarkerObserved}, argumentsClean=${trace.toolArgumentsExcludeHistoryMarkers})`
+  );
+
+  requireQualification(
+    result.audits.every(
+      (item) =>
+        item.state !== "failed" ||
+        (item.responseRestore === "not_needed" && item.errorCategory === null)
+    ),
+    caseInfo.caseId,
+    "successful lifecycle contains a compatibility failure"
   );
 
   const restored = result.audits.filter(
@@ -255,9 +285,9 @@ export function validateSuccessfulLifecycle(
     "agent_message compatibility transformation was not audited"
   );
   requireQualification(
-    restored.every((item) => item.sessionId === trace.childThreadId),
+    restored.every((item) => item.sessionId === trace.rootThreadId),
     caseInfo.caseId,
-    "restored audits are not correlated to the isolated child thread"
+    "restored audits are not correlated to the shared root session tree"
   );
   requireQualification(
     new Set(restored.map((item) => item.requestId)).size >= 2,
@@ -270,6 +300,39 @@ export function validateSuccessfulLifecycle(
     "child lifecycle audits do not contain two distinct response ids"
   );
   return restored[0]!;
+}
+
+export function validateExpectedClientAbortAudit(
+  caseId: string,
+  audit: PortableAudit,
+  usageItem: Record<string, unknown>
+): void {
+  requireQualification(
+    audit.state === "failed" &&
+      audit.responseRestore === "not_needed" &&
+      audit.errorCategory === null,
+    caseId,
+    "failed portable audit is not a transport-only lifecycle outcome"
+  );
+  requireQualification(
+    usageItem.id === audit.requestId &&
+      usageItem.statusCode === 499 &&
+      usageItem.errorMessage === "CLIENT_ABORTED",
+    caseId,
+    "failed portable audit is not correlated to an expected client cancellation"
+  );
+}
+
+export async function assertOnlyExpectedClientAbortFailures(
+  qualification: PortableQualificationConfig,
+  result: LifecycleResult,
+  caseId: string,
+  protectedValues: string[]
+): Promise<void> {
+  for (const audit of result.audits.filter((item) => item.state === "failed")) {
+    const usageItem = await fetchUsageItemForAudit(qualification, audit, caseId, protectedValues);
+    validateExpectedClientAbortAudit(caseId, audit, usageItem);
+  }
 }
 
 export function validateHttpNonStream(
@@ -407,7 +470,8 @@ export function validateInjectedFaultUsage(
   target: QualificationProvider,
   targetModel: string,
   audit: PortableAudit,
-  item: Record<string, unknown>
+  item: Record<string, unknown>,
+  upstreamErrorProbe: UpstreamErrorProbeResult | null = null
 ): void {
   requireQualification(
     item.id === audit.requestId && item.sessionId === audit.sessionId,
@@ -425,7 +489,9 @@ export function validateInjectedFaultUsage(
     requireQualification(
       item.statusCode === 499 &&
         item.errorMessage === "CLIENT_ABORTED" &&
-        audit.errorCategory === "compatibility_restore_failed",
+        audit.state === "failed" &&
+        audit.responseRestore === "not_needed" &&
+        audit.errorCategory === null,
       caseInfo.caseId,
       "timeout did not produce the expected 499/CLIENT_ABORTED portable failure"
     );
@@ -438,18 +504,42 @@ export function validateInjectedFaultUsage(
         )
       : [];
     requireQualification(
-      item.statusCode === 400 &&
-        audit.errorCategory === null &&
-        chain.some(
-          (entry) =>
-            entry.id === target.id &&
-            entry.name === target.name &&
-            entry.reason === "client_error_non_retryable" &&
-            entry.statusCode === 400
-        ),
+      upstreamErrorProbe !== null,
       caseInfo.caseId,
-      "upstream-error injection did not produce the expected Provider 400 classification"
+      "upstream-error injection was not preceded by a deterministic fault-model preflight"
     );
+    if (upstreamErrorProbe.kind === "http_400") {
+      requireQualification(
+        item.statusCode === 400 &&
+          audit.errorCategory === null &&
+          chain.some(
+            (entry) =>
+              entry.id === target.id &&
+              entry.name === target.name &&
+              entry.reason === "client_error_non_retryable" &&
+              entry.statusCode === 400
+          ),
+        caseInfo.caseId,
+        "upstream-error injection did not produce the expected Provider 400 classification"
+      );
+    } else {
+      requireQualification(
+        item.statusCode === 200 &&
+          audit.state === "failed" &&
+          audit.responseRestore === "not_needed" &&
+          audit.errorCategory === null &&
+          audit.responseId !== null &&
+          chain.some(
+            (entry) =>
+              entry.id === target.id &&
+              entry.name === target.name &&
+              entry.reason === "request_success" &&
+              entry.statusCode === 200
+          ),
+        caseInfo.caseId,
+        "upstream-error injection did not preserve the expected Provider SSE response.failed outcome"
+      );
+    }
   }
 }
 

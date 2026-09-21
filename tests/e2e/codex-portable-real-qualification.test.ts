@@ -14,6 +14,7 @@ import {
 import {
   assertNativeRootUsage,
   assertNoProtectedText,
+  assertOnlyExpectedClientAbortFailures,
   assertOperationalLogsClean,
   auditSessionIds,
   fetchUsageLogs,
@@ -31,7 +32,9 @@ import {
 import {
   executeHttpNonStreamQualification,
   executeLifecycle,
+  probeUpstreamErrorModel,
   randomMarker,
+  type UpstreamErrorProbeResult,
 } from "./_helpers/portable-qualification-lifecycle";
 import {
   baseExecArgs,
@@ -109,6 +112,12 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
         const target = qualification[caseInfo.providerKind as "deepseek" | "glm"];
         const result = await executeLifecycle(qualification, invocation, caseInfo);
         await assertNativeRootUsage(qualification, result.run, caseInfo.caseId, result.sentinels);
+        await assertOnlyExpectedClientAbortFailures(
+          qualification,
+          result,
+          caseInfo.caseId,
+          result.sentinels
+        );
         const audit = validateSuccessfulLifecycle(caseInfo, target, result);
         const usageItem = await fetchUsageItemForAudit(
           qualification,
@@ -145,6 +154,10 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
       caseInfo.caseId,
       async () => {
         const target = qualification[caseInfo.providerKind as "deepseek" | "glm"];
+        let upstreamErrorProbe: UpstreamErrorProbeResult | null = null;
+        if (caseInfo.operation === "upstream_error") {
+          upstreamErrorProbe = await probeUpstreamErrorModel(qualification, target);
+        }
         const faultOptions =
           caseInfo.operation === "cancellation"
             ? { cancelFinalAfterMs: qualification.cancelAfterMs }
@@ -172,7 +185,14 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
           fault.sentinels
         );
         if (caseInfo.operation === "timeout" || caseInfo.operation === "upstream_error") {
-          validateInjectedFaultUsage(caseInfo, target, faultModel, faultAudit, faultUsageItem);
+          validateInjectedFaultUsage(
+            caseInfo,
+            target,
+            faultModel,
+            faultAudit,
+            faultUsageItem,
+            upstreamErrorProbe
+          );
         }
         if (caseInfo.operation === "cancellation") {
           requireQualification(
@@ -184,6 +204,12 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
 
         const recoveryCase = lifecycleCaseForRecovery(caseInfo);
         const recovery = await executeLifecycle(qualification, invocation, recoveryCase);
+        await assertOnlyExpectedClientAbortFailures(
+          qualification,
+          recovery,
+          recoveryCase.caseId,
+          recovery.sentinels
+        );
         const recoveryAudit = validateSuccessfulLifecycle(recoveryCase, target, recovery);
         const recoveryUsageItem = await fetchUsageItemForAudit(
           qualification,
@@ -229,7 +255,7 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
               caseInfo.operation === "timeout"
                 ? "CLIENT_ABORTED"
                 : caseInfo.operation === "upstream_error"
-                  ? "HTTP_400_CLIENT_ERROR_NON_RETRYABLE"
+                  ? upstreamErrorProbe?.stableErrorCode
                   : faultAudit.errorCategory,
           }),
           secrets,

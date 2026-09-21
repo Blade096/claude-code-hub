@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   send: vi.fn(),
+  getCachedSystemSettings: vi.fn(),
   logger: {
     debug: vi.fn(),
     error: vi.fn(),
@@ -13,6 +14,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/app/v1/_lib/proxy/forwarder", () => ({
   ProxyForwarder: { send: mocks.send },
+}));
+
+vi.mock("@/lib/config", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/config")>()),
+  getCachedSystemSettings: mocks.getCachedSystemSettings,
 }));
 
 vi.mock("@/lib/logger", () => ({ logger: mocks.logger }));
@@ -102,6 +108,9 @@ function successfulResponsesBody(): string {
 describe("portable MultiAgentV2 fake-streaming bypass", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.getCachedSystemSettings.mockResolvedValue({
+      enableCodexMultiAgentV2Compatibility: true,
+    });
     mocks.send.mockResolvedValue(
       new Response(successfulResponsesBody(), {
         status: 200,

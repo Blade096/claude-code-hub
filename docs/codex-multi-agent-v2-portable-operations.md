@@ -86,6 +86,7 @@ Harness 会执行以下真实场景：
 - 每类 Provider 都验证 `fork_turns=none`、最近一轮和 `all`，使用只存在于已完成父轮次的随机 marker 判断历史边界。
 - 每类 Provider 验证 HTTP non-stream 与 SSE；不生成 portable WebSocket 用例。
 - 每类 Provider 验证主动取消、目标 child idle timeout、真实上游错误，随后立即在全新逻辑线程运行成功恢复用例，检查 session/response metadata 不串线。
+- 真实上游错误用例会先用配置的故障模型执行一次轻量 SSE 探针；只有同传输形态确定返回 HTTP 400，或返回包含 `response.failed` 与 `model_not_found` 的 SSE 终止错误，才启动昂贵的 Codex 生命周期。普通 HTTP 200、`response.completed`、非 SSE 响应或其他错误码都会直接失败，避免把被透明路由或正常完成的模型别名误当成有效故障注入。
 - 单独运行 native root control，确认命中指定 native Provider；总开关开启时允许记录根工具 schema/命名空间准备产生的兼容审计，但不得出现 portable child 的 `agent_message_input` 转换。
 
 Harness 不会把原始 Codex JSONL、stderr、tool arguments 或上游 body 写成长期工件。为了恢复根会话并验证三种历史模式，Codex 必须在临时 `CODEX_HOME` 中保存 session；这个临时目录可能包含 prompt 明文，套件结束后会递归删除。应让系统临时目录位于加密、访问受控的磁盘，并在进程异常退出后检查和清理 `cch-portable-qualification-*` 残留目录。

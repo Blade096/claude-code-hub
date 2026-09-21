@@ -520,12 +520,9 @@ export async function restorePortableCompatibilityResponse(
       },
       onCancel() {
         if (terminal === null) {
-          failRestore(
-            new PortableCompatibilityError("malformed_response", {
-              fieldPath: "response.cancelled",
-              providerId: metadata.providerId,
-            })
-          );
+          // Cancellation is a request lifecycle outcome. It does not prove the
+          // upstream SSE payload or the portable identity mapping was invalid.
+          markPortableUpstreamResponseFailed(metadata);
         }
       },
       onFinalize() {

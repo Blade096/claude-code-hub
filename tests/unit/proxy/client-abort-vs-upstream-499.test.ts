@@ -102,6 +102,27 @@ describe("categorizeErrorAsync - 499 source awareness", () => {
   });
 });
 
+describe("categorizeErrorAsync - deterministic invalid model errors", () => {
+  it("should not retry a Provider 400 that explicitly rejects the requested model name", async () => {
+    const error = new ProxyError(
+      "The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed cch_qa_invalid_deepseek_model.",
+      400,
+      {
+        body: JSON.stringify({
+          error: {
+            message:
+              "The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed cch_qa_invalid_deepseek_model.",
+          },
+        }),
+        providerId: 50,
+        providerName: "Deepseek",
+      }
+    );
+
+    expect(await categorizeErrorAsync(error)).toBe(ErrorCategory.NON_RETRYABLE_CLIENT_ERROR);
+  });
+});
+
 describe("ProxyError.fromUpstreamResponse - isLocalAbort default", () => {
   // Scenario 9: fromUpstreamResponse should produce isLocalAbort=false
   it("should create ProxyError with isLocalAbort=false from upstream 499 response", async () => {

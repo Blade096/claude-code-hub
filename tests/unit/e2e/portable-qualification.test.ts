@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   assertEvidencePathOutsideRepository,
   appendSafeEvidence,
@@ -20,12 +20,19 @@ import {
   cleanupQualificationHomes,
   writeCodexHome,
 } from "../../e2e/_helpers/portable-qualification-invocation";
-import { buildLifecyclePrompt } from "../../e2e/_helpers/portable-qualification-lifecycle";
+import {
+  buildLifecyclePrompt,
+  type LifecycleResult,
+  probeUpstreamErrorModel,
+} from "../../e2e/_helpers/portable-qualification-lifecycle";
 import {
   isTargetChildAudit,
   targetTerminalAudit,
   usageItemMatchesProvider,
+  validateExpectedClientAbortAudit,
+  validateInjectedFaultUsage,
   validateInjectedFaultProcess,
+  validateSuccessfulLifecycle,
 } from "../../e2e/_helpers/portable-qualification-assertions";
 import { analyzeLifecycleRollouts } from "../../e2e/_helpers/portable-qualification-rollout";
 
@@ -103,6 +110,79 @@ function timeoutCase(): QualificationCase {
     caseId: "deepseek_timeout_sse",
     operation: "timeout",
     expected: "failure",
+  };
+}
+
+function upstreamErrorCase(): QualificationCase {
+  return {
+    ...sampleCase(),
+    caseId: "deepseek_upstream_error_sse",
+    operation: "upstream_error",
+    expected: "failure_then_recovery",
+  };
+}
+
+function successfulLifecycleResult(
+  audits: PortableAudit[] = [
+    audit({
+      transformations: ["agent_message_input"],
+      responseRestore: "not_needed",
+      requestId: 101,
+      sessionId: "root-thread",
+      responseId: "response-1",
+    }),
+    audit({
+      transformations: ["agent_message_input"],
+      responseRestore: "not_needed",
+      requestId: 102,
+      sessionId: "root-thread",
+      responseId: "response-2",
+    }),
+  ]
+): LifecycleResult {
+  return {
+    run: {
+      threadId: "root-thread",
+      relatedThreadIds: ["child-thread"],
+      usage: null,
+      finalMessage: null,
+      failed: false,
+      collabTools: ["spawn_agent", "send_message", "followup_task"],
+      collabAgentMessages: [],
+    },
+    audits,
+    trace: {
+      rootThreadId: "root-thread",
+      childThreadId: "child-thread",
+      childAgentPath: "/root/deepseek-child",
+      observedActions: ["spawn_agent", "send_message", "followup_task"],
+      stateEdgeVerified: true,
+      actionSequenceComplete: true,
+      toolOutputsComplete: true,
+      sendWhileRunning: true,
+      followupAfterCompletion: true,
+      parentReceivedResults: true,
+      childReturnedLiveNonce: true,
+      childReturnedFollowupNonce: true,
+      historyBoundaryMatches: true,
+      historyOldMarkerObserved: false,
+      historyRecentMarkerObserved: false,
+      toolArgumentsExcludeHistoryMarkers: true,
+    },
+    sentinels: ["old", "recent", "live", "followup"],
+    lifecycle: {
+      case_id: sampleCase().caseId,
+      spawn_agent: true,
+      send_message_while_running: true,
+      followup_task_after_completion: true,
+      parent_received_results: true,
+      inherited_history_markers: [],
+      live_nonce: "live",
+      followup_nonce: "followup",
+    },
+    code: 0,
+    cancelled: false,
+    timedOut: false,
   };
 }
 
@@ -270,6 +350,227 @@ describe("portable qualification evidence safety", () => {
     expect(() =>
       validateInjectedFaultProcess(timeoutCase(), { cancelled: false, timedOut: false })
     ).not.toThrow();
+  });
+
+  test("accepts an HTTP 400 fault-model preflight before starting a lifecycle", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response('{"error":"invalid model"}', { status: 400 }));
+    try {
+      await expect(probeUpstreamErrorModel(config, config.deepseek)).resolves.toEqual({
+        kind: "http_400",
+        status: 400,
+        stableErrorCode: "HTTP_400_CLIENT_ERROR_NON_RETRYABLE",
+      });
+      const request = fetchMock.mock.calls[0];
+      expect(request?.[0]).toBe("https://cch.example.test/v1/responses");
+      expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({
+        model: "deepseek-error-fixture",
+        stream: true,
+        store: false,
+      });
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test("accepts a model_not_found response.failed SSE fault-model preflight", async () => {
+    const body = [
+      "event: response.failed",
+      'data: {"type":"response.failed","response":{"id":"resp_failed","error":{"code":"model_not_found"}}}',
+      "",
+      "event: error",
+      'data: {"type":"error","code":"model_not_found"}',
+      "",
+      "data: [DONE]",
+      "",
+    ].join("\n");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(body, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      })
+    );
+    try {
+      await expect(probeUpstreamErrorModel(config, config.glm)).resolves.toEqual({
+        kind: "sse_response_failed",
+        status: 200,
+        stableErrorCode: "SSE_RESPONSE_FAILED_MODEL_NOT_FOUND",
+      });
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test("rejects HTTP 200 when the fault-model preflight completes successfully", async () => {
+    const body = [
+      "event: response.completed",
+      'data: {"type":"response.completed","response":{"id":"resp_completed"}}',
+      "",
+      "data: [DONE]",
+      "",
+    ].join("\n");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(body, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      })
+    );
+    try {
+      await expect(probeUpstreamErrorModel(config, config.glm)).rejects.toThrow(
+        "without response.failed(model_not_found)"
+      );
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test("accepts a timeout audit only when it is a neutral client-abort failure", () => {
+    const configTarget = config.deepseek;
+    const timeoutAudit = audit({
+      state: "failed",
+      responseRestore: "not_needed",
+      errorCategory: null,
+      requestId: 901,
+      sessionId: "timeout-session",
+    });
+    const usageItem = {
+      id: 901,
+      sessionId: "timeout-session",
+      providerId: configTarget.id,
+      providerName: configTarget.name,
+      model: configTarget.model,
+      statusCode: 499,
+      errorMessage: "CLIENT_ABORTED",
+    };
+
+    expect(() =>
+      validateInjectedFaultUsage(
+        timeoutCase(),
+        configTarget,
+        configTarget.model,
+        timeoutAudit,
+        usageItem
+      )
+    ).not.toThrow();
+    expect(() =>
+      validateInjectedFaultUsage(
+        timeoutCase(),
+        configTarget,
+        configTarget.model,
+        { ...timeoutAudit, errorCategory: "compatibility_restore_failed" },
+        usageItem
+      )
+    ).toThrow("expected 499/CLIENT_ABORTED");
+  });
+
+  test("accepts a failed SSE terminal event as a provider-native upstream error", () => {
+    const target = config.glm;
+    const failedAudit = audit({
+      state: "failed",
+      requestedProviderId: target.id,
+      requestedProviderName: target.name,
+      actualProviderId: target.id,
+      actualProviderName: target.name,
+      requestedModel: target.upstreamErrorModel,
+      actualModel: "provider-invalid-model",
+      responseRestore: "not_needed",
+      errorCategory: null,
+      responseId: "resp_failed",
+    });
+    const usageItem = {
+      id: failedAudit.requestId,
+      sessionId: failedAudit.sessionId,
+      providerId: target.id,
+      providerName: target.name,
+      model: "provider-invalid-model",
+      originalModel: target.upstreamErrorModel,
+      statusCode: 200,
+      errorMessage: null,
+      providerChain: [
+        { id: target.id, name: target.name, reason: "request_success", statusCode: 200 },
+      ],
+    };
+
+    expect(() =>
+      validateInjectedFaultUsage(
+        { ...upstreamErrorCase(), providerKind: "glm" },
+        target,
+        target.upstreamErrorModel!,
+        failedAudit,
+        usageItem,
+        {
+          kind: "sse_response_failed",
+          status: 200,
+          stableErrorCode: "SSE_RESPONSE_FAILED_MODEL_NOT_FOUND",
+        }
+      )
+    ).not.toThrow();
+  });
+
+  test("correlates child audits to the shared root session tree", () => {
+    expect(() =>
+      validateSuccessfulLifecycle(sampleCase(), config.deepseek, successfulLifecycleResult())
+    ).not.toThrow();
+  });
+
+  test("rejects a child thread id used as the shared audit session id", () => {
+    const result = successfulLifecycleResult(
+      successfulLifecycleResult().audits.map((item) => ({
+        ...item,
+        sessionId: "child-thread",
+      }))
+    );
+
+    expect(() => validateSuccessfulLifecycle(sampleCase(), config.deepseek, result)).toThrow(
+      "restored audits are not correlated to the shared root session tree"
+    );
+  });
+
+  test("rejects failed portable audits mixed into a successful lifecycle", () => {
+    const result = successfulLifecycleResult([
+      ...successfulLifecycleResult().audits,
+      audit({
+        state: "failed",
+        transformations: ["agent_message_input"],
+        responseRestore: "failed",
+        errorCategory: "compatibility_restore_failed",
+        requestId: 103,
+        sessionId: "root-thread",
+        responseId: "response-3",
+      }),
+    ]);
+
+    expect(() => validateSuccessfulLifecycle(sampleCase(), config.deepseek, result)).toThrow(
+      "successful lifecycle contains a compatibility failure"
+    );
+  });
+
+  test("allows only a failed audit correlated to an expected client cancellation", () => {
+    const result = successfulLifecycleResult();
+    const cancelled = audit({
+      state: "failed",
+      responseRestore: "not_needed",
+      errorCategory: null,
+      requestId: 901,
+    });
+    result.audits.push(cancelled);
+
+    expect(() =>
+      validateExpectedClientAbortAudit("client_abort", cancelled, {
+        id: 901,
+        statusCode: 499,
+        errorMessage: "CLIENT_ABORTED",
+      })
+    ).not.toThrow();
+    expect(() =>
+      validateExpectedClientAbortAudit("upstream_abort", cancelled, {
+        id: 901,
+        statusCode: 502,
+        errorMessage: "STREAM_UPSTREAM_ABORTED",
+      })
+    ).toThrow("not correlated to an expected client cancellation");
+    expect(() => validateSuccessfulLifecycle(sampleCase(), config.deepseek, result)).not.toThrow();
   });
 
   test("extracts only portable audit records from nested usage-log responses", () => {
@@ -634,9 +935,17 @@ describe("portable qualification isolated rollout evidence", () => {
     );
 
     expect(prompt).not.toContain(sentinels[1]);
-    expect(prompt).toContain("fork_turns=1");
-    expect(prompt).toContain("use its wait collaboration tool");
+    expect(prompt).toContain("fork_turns=2");
+    expect(prompt).toContain("call wait_agent exactly once with timeout_ms=300000");
     expect(prompt).toContain("must not complete before acknowledging that nonce");
+    expect(prompt).toContain("The child is not the parent orchestrator");
+    expect(prompt).toContain("wait_agent is the only tool it may call, exactly once");
+    expect(prompt).toContain("must not call write_stdin, exec_command");
+    expect(prompt).toContain("spawn_agent, send_message, followup_task");
+    expect(prompt).toContain("create_goal, or update_goal");
+    expect(prompt).toContain("return immediately and stop");
+    expect(prompt).toContain("This is the follow-up turn");
+    expect(prompt).toContain("must not call wait again");
   });
 
   function line(offsetMs: number, type: string, payload: Record<string, unknown>): string {
@@ -688,7 +997,8 @@ describe("portable qualification isolated rollout evidence", () => {
         task_name: "deepseek-child",
         agent_type: "deepseek",
         fork_turns: "1",
-        message: "Report inherited markers without receiving their values.",
+        message:
+          "Report inherited markers; wait_agent is the only tool and do not call write_stdin.",
       }),
       functionOutput(20, "call-spawn"),
       activity(30, "call-spawn", "started"),
@@ -729,6 +1039,16 @@ describe("portable qualification isolated rollout evidence", () => {
         },
       ],
     }),
+    line(5, "response_item", {
+      type: "message",
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text: "wait_agent is the only tool and do not call write_stdin",
+        },
+      ],
+    }),
   ].join("\n");
 
   test("proves the lifecycle from full rollout even when exec JSON only exposes wait", () => {
@@ -759,6 +1079,8 @@ describe("portable qualification isolated rollout evidence", () => {
       historyOldMarkerObserved: false,
       historyRecentMarkerObserved: true,
       toolArgumentsExcludeHistoryMarkers: true,
+      spawnTaskProhibitsTools: true,
+      childReceivedToolProhibition: true,
     });
   });
 
@@ -802,7 +1124,7 @@ describe("portable qualification isolated rollout evidence", () => {
 
   test("rejects inherited history leaked into collaboration arguments", () => {
     const leaked = completeRootRollout().replace(
-      "Report inherited markers without receiving their values.",
+      "Report inherited markers; wait_agent is the only tool and do not call write_stdin.",
       `Leaked ${sentinels[0]}`
     );
     const trace = analyzeLifecycleRollouts({

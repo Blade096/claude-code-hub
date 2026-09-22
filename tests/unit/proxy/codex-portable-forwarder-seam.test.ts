@@ -126,7 +126,7 @@ function makeSession(provider: Provider, overrides: Record<string, unknown> = {}
         recipient: "/root/worker",
         content: [
           { type: "input_text", text: "Payload:\n" },
-          { type: "encrypted_content", encrypted_content: "Complete the seam test task." },
+          { type: "input_text", text: "Complete the seam test task." },
         ],
       },
     ],
@@ -177,6 +177,16 @@ function makeSession(provider: Provider, overrides: Record<string, unknown> = {}
     rawCrossProviderFallbackEnabled: false,
     forwardedRequestBody: null,
     portableTransformationMetadata: null,
+    providersSnapshot: [
+      {
+        id: 84,
+        name: "portable-child-provider",
+        isEnabled: true,
+        providerType: "codex",
+        codexMultiAgentV2Mode: "portable",
+        allowedModels: [{ matchType: "exact", pattern: "deepseek-flash" }],
+      } as Provider,
+    ],
     endpointPolicy: resolveEndpointPolicy("/v1/responses"),
   });
   return session;
@@ -329,7 +339,7 @@ describe("portable compatibility proxy seams", () => {
               type: "agent_message",
               content: [
                 { type: "input_text", text: "Payload:\n" },
-                { type: "encrypted_content", encrypted_content: "Run the boundary task." },
+                { type: "input_text", text: "Run the boundary task." },
               ],
             },
           ],
@@ -351,7 +361,13 @@ describe("portable compatibility proxy seams", () => {
         ],
       });
       await expect(response.json()).resolves.toMatchObject({
-        output: [{ namespace: "collaboration", name: action }],
+        output: [
+          {
+            namespace: "collaboration",
+            name: action,
+            encrypted_function_args: [],
+          },
+        ],
       });
     }
   );
@@ -510,7 +526,7 @@ describe("portable compatibility proxy seams", () => {
     expect(session.getSpecialSettings()).toHaveLength(1);
   });
 
-  test("prepares native collaboration tools and readable child input after compaction replay expansion", async () => {
+  test("adds portable tools while preserving a native encrypted child after compaction", async () => {
     const provider = { ...makeProvider(), codexMultiAgentV2Mode: "native" as const } as Provider;
     const token = encodeCompactionSummary({
       summary: "Native checkpoint summary.",
@@ -518,7 +534,12 @@ describe("portable compatibility proxy seams", () => {
       createdAtSeconds: 1_700_000_000,
     });
     const replay = expandCompactionReplayItems([{ type: "compaction", encrypted_content: token }]);
-    const originalAgentMessage = (makeSession(provider).request.message.input as unknown[])[0];
+    const originalAgentMessage = {
+      type: "agent_message",
+      author: "/root",
+      recipient: "/root/native-worker",
+      content: [{ type: "encrypted_content", encrypted_content: "opaque-native-payload" }],
+    };
     const session = makeSession(provider, {
       input: [...replay.items, originalAgentMessage],
     });
@@ -542,9 +563,28 @@ describe("portable compatibility proxy seams", () => {
     expect(upstreamBody).toMatchObject({
       tools: [
         {
+          name: "collaboration",
+          tools: [
+            {
+              name: "spawn_agent",
+              parameters: {
+                properties: { message: { type: "string", encrypted: true } },
+              },
+            },
+          ],
+        },
+        {
           name: "collaboration-optimize",
           tools: [
-            { name: "spawn_agent", parameters: { properties: { message: { type: "string" } } } },
+            {
+              name: "spawn_portable_agent",
+              parameters: {
+                properties: {
+                  message: { type: "string" },
+                  model: { type: "string", enum: ["deepseek-flash"] },
+                },
+              },
+            },
           ],
         },
       ],
@@ -554,12 +594,10 @@ describe("portable compatibility proxy seams", () => {
           content: [{ type: "input_text", text: expect.stringContaining("Native checkpoint") }],
         },
         {
-          type: "message",
-          role: "user",
-          content: [
-            { type: "input_text", text: "Payload:\n" },
-            { type: "input_text", text: "Complete the seam test task." },
-          ],
+          type: "agent_message",
+          author: "/root",
+          recipient: "/root/native-worker",
+          content: [{ type: "encrypted_content", encrypted_content: "opaque-native-payload" }],
         },
       ],
     });
@@ -567,7 +605,6 @@ describe("portable compatibility proxy seams", () => {
     expect(session.getPortableTransformationMetadata()?.transformations).toEqual([
       "spawn_agent_message_schema",
       "collaboration_namespace",
-      "agent_message_input",
     ]);
     expect(session.getSpecialSettings()).toHaveLength(1);
   });

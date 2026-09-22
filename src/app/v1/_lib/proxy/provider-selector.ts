@@ -88,6 +88,52 @@ function providerSupportsModel(provider: Provider, requestedModel: string): bool
   return matchesAllowedModelRules(requestedModel, provider.allowedModels);
 }
 
+type CodexAgentMessageMode = "encrypted" | "plaintext";
+
+function getCodexAgentMessageMode(session?: ProxySession): CodexAgentMessageMode | null {
+  if (session?.originalFormat !== "response") return null;
+  const message = session.request?.message;
+  if (!message) return null;
+  const metadata = message.client_metadata;
+  if (
+    !metadata ||
+    typeof metadata !== "object" ||
+    Array.isArray(metadata) ||
+    typeof (metadata as Record<string, unknown>)["x-openai-subagent"] !== "string" ||
+    typeof (metadata as Record<string, unknown>)["x-codex-parent-thread-id"] !== "string" ||
+    !Array.isArray(message.input)
+  ) {
+    return null;
+  }
+
+  const agentMessage = message.input.findLast(
+    (item) =>
+      item !== null &&
+      typeof item === "object" &&
+      !Array.isArray(item) &&
+      (item as Record<string, unknown>).type === "agent_message"
+  ) as Record<string, unknown> | undefined;
+  if (!agentMessage || !Array.isArray(agentMessage.content)) return null;
+
+  let hasPlaintext = false;
+  for (const part of agentMessage.content) {
+    if (part === null || typeof part !== "object" || Array.isArray(part)) continue;
+    const type = (part as Record<string, unknown>).type;
+    if (type === "encrypted_content") return "encrypted";
+    if (type === "input_text") hasPlaintext = true;
+  }
+  return hasPlaintext ? "plaintext" : null;
+}
+
+function providerSupportsCodexAgentMessageMode(
+  provider: Provider,
+  mode: CodexAgentMessageMode | null
+): boolean {
+  if (mode === null) return true;
+  const providerMode = provider.codexMultiAgentV2Mode ?? "native";
+  return mode === "plaintext" ? providerMode === "portable" : providerMode === "native";
+}
+
 /**
  * 根据原始请求格式限制可选供应商类型
  *
@@ -553,6 +599,22 @@ export class ProxyProviderResolver {
       return null;
     }
 
+    const codexAgentMessageMode = getCodexAgentMessageMode(session);
+    if (!providerSupportsCodexAgentMessageMode(provider, codexAgentMessageMode)) {
+      logger.debug(
+        "ProviderSelector: Session provider incompatible with Codex child message mode",
+        {
+          sessionId: session.sessionId,
+          providerId: provider.id,
+          providerName: provider.name,
+          providerMode: provider.codexMultiAgentV2Mode ?? "native",
+          codexAgentMessageMode,
+        }
+      );
+      await SessionManager.clearSessionProvider(session.sessionId);
+      return null;
+    }
+
     // 检查模型支持
     const requestedModel = session.getOriginalModel();
     if (requestedModel && !providerSupportsModel(provider, requestedModel)) {
@@ -724,6 +786,7 @@ export class ProxyProviderResolver {
     // 如果没有 session，回退到 findAllProviders（内部已使用缓存）
     const allProviders = session ? await session.getProvidersSnapshot() : await findAllProviders();
     const requestedModel = session?.getOriginalModel() || "";
+    const codexAgentMessageMode = getCodexAgentMessageMode(session);
 
     // === Step 1: 分组预过滤（静默，用户只能看到自己分组内的供应商）===
     const effectiveGroupPick = getEffectiveProviderGroup(session);
@@ -863,6 +926,10 @@ export class ProxyProviderResolver {
         }
       }
 
+      if (!providerSupportsCodexAgentMessageMode(provider, codexAgentMessageMode)) {
+        return false;
+      }
+
       // 2c. 模型匹配
       if (!requestedModel) {
         // 资源类端点通常不携带 model，此时仅按格式兼容性筛选 provider，
@@ -904,6 +971,9 @@ export class ProxyProviderResolver {
         ) {
           reason = "format_type_mismatch";
           details = `原始格式 ${session.originalFormat} 与供应商类型 ${p.providerType} 不兼容`;
+        } else if (!providerSupportsCodexAgentMessageMode(p, codexAgentMessageMode)) {
+          reason = "type_mismatch";
+          details = `Codex 子代理消息模式 ${codexAgentMessageMode} 与供应商模式 ${p.codexMultiAgentV2Mode ?? "native"} 不兼容`;
         } else if (requestedModel && !providerSupportsModel(p, requestedModel)) {
           reason = "model_not_allowed";
           details = `不支持模型 ${requestedModel}`;

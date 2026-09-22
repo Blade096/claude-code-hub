@@ -311,9 +311,9 @@ describe("portable real qualification configuration", () => {
 });
 
 describe("portable real qualification matrix", () => {
-  test("covers both portable families, all history modes, HTTP/SSE and faults", () => {
+  test("covers portable families plus native GPT child communication", () => {
     const cases = buildQualificationCases();
-    expect(cases).toHaveLength(15);
+    expect(cases).toHaveLength(16);
 
     for (const providerKind of ["deepseek", "glm"] as const) {
       const providerCases = cases.filter((item) => item.providerKind === providerKind);
@@ -333,7 +333,14 @@ describe("portable real qualification matrix", () => {
     }
 
     expect(cases.map((item) => item.transport)).not.toContain("websocket");
-    expect(cases.some((item) => item.providerKind === "native")).toBe(true);
+    expect(cases).toContainEqual({
+      caseId: "native_child_lifecycle_none_sse",
+      providerKind: "native",
+      operation: "lifecycle",
+      historyMode: "none",
+      transport: "sse",
+      expected: "success",
+    });
   });
 });
 

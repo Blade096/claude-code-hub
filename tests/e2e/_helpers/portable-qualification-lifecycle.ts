@@ -206,9 +206,6 @@ export async function executeLifecycle(
     cancelFinalAfterMs?: number;
   } = {}
 ): Promise<LifecycleResult> {
-  if (caseInfo.providerKind === "native") {
-    throw new Error("Native control is not a child lifecycle.");
-  }
   const target = qualification[caseInfo.providerKind];
   if (caseInfo.transport === "http") {
     throw new Error("HTTP non-stream qualification uses its dedicated direct invocation.");

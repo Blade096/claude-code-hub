@@ -359,6 +359,7 @@ export type CodexMultiAgentV2PortableSpecialSetting = {
     | "send_message_message_schema"
     | "followup_task_message_schema"
     | "collaboration_namespace"
+    | "collaboration_history"
     | "agent_message_input"
   >;
   responseRestore: "not_started" | "pending" | "restored" | "not_needed" | "failed";

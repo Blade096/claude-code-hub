@@ -63,6 +63,167 @@ function metadata(
 }
 
 describe("Codex MultiAgentV2 portable response codec", () => {
+  test("marks only a restored portable spawn call as plaintext", () => {
+    const state = Object.assign(metadata(), {
+      toolPresentation: "duplicate" as const,
+      portableTargetModels: ["deepseek-flash"],
+      toolMappings: [
+        {
+          encodedNamespace: "collaboration-optimize",
+          encodedName: "spawn_portable_agent",
+          originalNamespace: "collaboration",
+          originalName: "spawn_agent",
+        },
+      ],
+    });
+    const payload = {
+      output: [
+        {
+          type: "function_call",
+          call_id: "call_portable",
+          namespace: "collaboration-optimize",
+          name: "spawn_portable_agent",
+          arguments: JSON.stringify({
+            model: "deepseek-flash",
+            message: "Review the bounded change.",
+          }),
+        },
+        {
+          type: "function_call",
+          call_id: "call_native",
+          namespace: "collaboration",
+          name: "spawn_agent",
+          arguments: JSON.stringify({
+            model: "gpt-5.6",
+            message: "opaque-native-message",
+          }),
+        },
+      ],
+    };
+
+    const restored = restorePortableCompatibilityPayload(payload, state);
+    const output = (restored.payload as { output: Array<Record<string, unknown>> }).output;
+
+    expect(output[0]).toMatchObject({
+      namespace: "collaboration",
+      name: "spawn_agent",
+      encrypted_function_args: [],
+    });
+    expect(output[1]).not.toHaveProperty("encrypted_function_args");
+    expect(output[1]).toEqual(payload.output[1]);
+  });
+
+  test("passes native collaboration calls through when native tools were preserved", () => {
+    const state = Object.assign(metadata(), { toolPresentation: "duplicate" as const });
+    const payload = {
+      output: [
+        {
+          type: "function_call",
+          call_id: "call_wait",
+          namespace: "collaboration",
+          name: "wait_agent",
+          arguments: "{}",
+        },
+      ],
+    };
+
+    expect(restorePortableCompatibilityPayload(payload, state)).toEqual({
+      payload,
+      restoredCount: 0,
+    });
+  });
+
+  test.each([
+    { namespace: "collaboration", name: "spawn_agent" },
+    { name: "collaboration.spawn_agent" },
+    { name: "collaboration__spawn_agent" },
+    { name: "spawn_agent" },
+  ])("preserves native spawn identity %# when tools were duplicated", (identity) => {
+    const state = Object.assign(metadata(), {
+      toolPresentation: "duplicate" as const,
+      portableTargetModels: ["deepseek-flash"],
+    });
+    const item = {
+      type: "function_call",
+      call_id: "call_native_shape",
+      ...identity,
+      arguments: JSON.stringify({ model: "gpt-5.6", message: "opaque-native-message" }),
+    };
+    const payload = { output: [item] };
+
+    expect(restorePortableCompatibilityPayload(payload, state)).toEqual({
+      payload,
+      restoredCount: 0,
+    });
+    expect(item).not.toHaveProperty("encrypted_function_args");
+  });
+
+  test("rejects a native spawn call that names a portable-only model", () => {
+    const state = Object.assign(metadata(), {
+      toolPresentation: "duplicate" as const,
+      portableTargetModels: ["deepseek-flash"],
+    });
+
+    expect(() =>
+      restorePortableCompatibilityPayload(
+        {
+          output: [
+            {
+              type: "function_call",
+              call_id: "call_wrong_channel",
+              namespace: "collaboration",
+              name: "spawn_agent",
+              arguments: JSON.stringify({ model: "deepseek-flash", message: "Do the task." }),
+            },
+          ],
+        },
+        state
+      )
+    ).toThrowError(
+      expect.objectContaining({
+        compatibilityCode: "malformed_response",
+        fieldPath: "output.0.arguments.model",
+      })
+    );
+  });
+
+  test("rejects a portable spawn call whose model is outside the allowed targets", () => {
+    const state = Object.assign(metadata(), {
+      toolPresentation: "duplicate" as const,
+      portableTargetModels: ["deepseek-flash", "glm-5"],
+      toolMappings: [
+        {
+          encodedNamespace: "collaboration-optimize",
+          encodedName: "spawn_portable_agent",
+          originalNamespace: "collaboration",
+          originalName: "spawn_agent",
+        },
+      ],
+    });
+
+    expect(() =>
+      restorePortableCompatibilityPayload(
+        {
+          output: [
+            {
+              type: "function_call",
+              call_id: "call_wrong_target",
+              namespace: "collaboration-optimize",
+              name: "spawn_portable_agent",
+              arguments: JSON.stringify({ model: "other-model", message: "Do the task." }),
+            },
+          ],
+        },
+        state
+      )
+    ).toThrowError(
+      expect.objectContaining({
+        compatibilityCode: "malformed_response",
+        fieldPath: "output.0.arguments.model",
+      })
+    );
+  });
+
   test("does not validate ordinary function-call sequencing for input-only transformations", () => {
     const inputOnly = metadata();
     inputOnly.toolMappings = [];

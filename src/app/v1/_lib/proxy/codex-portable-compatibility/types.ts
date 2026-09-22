@@ -13,6 +13,7 @@ export type PortableCollaborationAction = (typeof PORTABLE_COLLABORATION_ACTIONS
 
 export type PortableToolIdentityMapping = {
   encodedNamespace: string;
+  encodedName?: string;
   originalNamespace: string;
   originalName: string;
 };
@@ -22,6 +23,7 @@ export type PortableTransformation =
   | "send_message_message_schema"
   | "followup_task_message_schema"
   | "collaboration_namespace"
+  | "collaboration_history"
   | "agent_message_input";
 
 export type PortableTransport = "http" | "sse" | "websocket";
@@ -41,6 +43,8 @@ export type PortableTransformationMetadata = {
   requestFingerprint: string;
   requestedModel: string | null;
   actualModel: string | null;
+  toolPresentation?: "duplicate" | "replace";
+  portableTargetModels?: string[];
   toolMappings: PortableToolIdentityMapping[];
   transformations: PortableTransformation[];
   matchedPaths: string[];

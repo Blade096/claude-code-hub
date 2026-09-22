@@ -109,7 +109,7 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
     test(
       caseInfo.caseId,
       async () => {
-        const target = qualification[caseInfo.providerKind as "deepseek" | "glm"];
+        const target = qualification[caseInfo.providerKind];
         const result = await executeLifecycle(qualification, invocation, caseInfo);
         await assertNativeRootUsage(qualification, result.run, caseInfo.caseId, result.sentinels);
         await assertOnlyExpectedClientAbortFailures(

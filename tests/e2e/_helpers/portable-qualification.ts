@@ -309,6 +309,14 @@ export function buildQualificationCases(): QualificationCase[] {
     }
   }
   cases.push({
+    caseId: "native_child_lifecycle_none_sse",
+    providerKind: "native",
+    operation: "lifecycle",
+    historyMode: "none",
+    transport: "sse",
+    expected: "success",
+  });
+  cases.push({
     caseId: "native_root_control_sse",
     providerKind: "native",
     operation: "recovery",

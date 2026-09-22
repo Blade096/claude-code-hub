@@ -28,7 +28,7 @@ function isCollaborationAction(value: string): value is PortableCollaborationAct
 }
 
 function mappingKey(mapping: PortableToolIdentityMapping): string {
-  return `${mapping.encodedNamespace}\u0000${mapping.originalNamespace}\u0000${mapping.originalName}`;
+  return `${mapping.encodedNamespace}\u0000${mapping.encodedName ?? mapping.originalName}\u0000${mapping.originalNamespace}\u0000${mapping.originalName}`;
 }
 
 function validateMappings(metadata: PortableTransformationMetadata): void {
@@ -45,6 +45,8 @@ function validateMappings(metadata: PortableTransformationMetadata): void {
       !isRecord(mapping) ||
       typeof mapping.encodedNamespace !== "string" ||
       mapping.encodedNamespace.length === 0 ||
+      (mapping.encodedName !== undefined &&
+        (typeof mapping.encodedName !== "string" || mapping.encodedName.length === 0)) ||
       typeof mapping.originalNamespace !== "string" ||
       mapping.originalNamespace.length === 0 ||
       typeof mapping.originalName !== "string" ||
@@ -75,7 +77,7 @@ function resolveMapping(
 ): PortableToolIdentityMapping {
   const matches = metadata.toolMappings.filter(
     (mapping) =>
-      mapping.originalName === name &&
+      (mapping.encodedName ?? mapping.originalName) === name &&
       (omittedNamespace || mapping.encodedNamespace === encodedNamespace)
   );
   if (matches.length === 0) {
@@ -106,10 +108,68 @@ function canonicalIdentity(namespace: string | null, name: string): string {
   return `${namespace ?? ""}\u0000${name}`;
 }
 
-function restoreFunctionCall(
+function validatePortableSpawnTarget(
+  item: Record<string, unknown>,
+  metadata: PortableTransformationMetadata,
+  fieldPath: string,
+  required: boolean
+): void {
+  const allowedModels = metadata.portableTargetModels ?? [];
+  if (allowedModels.length === 0) return;
+  if (typeof item.arguments !== "string" || item.arguments.length === 0) {
+    if (!required) return;
+    throw new PortableCompatibilityError("malformed_response", {
+      fieldPath: `${fieldPath}.arguments`,
+      providerId: metadata.providerId,
+    });
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(item.arguments);
+  } catch {
+    throw new PortableCompatibilityError("malformed_response", {
+      fieldPath: `${fieldPath}.arguments`,
+      providerId: metadata.providerId,
+    });
+  }
+  const model = isRecord(parsed) ? parsed.model : null;
+  if (typeof model !== "string" || !allowedModels.includes(model)) {
+    throw new PortableCompatibilityError("malformed_response", {
+      fieldPath: `${fieldPath}.arguments.model`,
+      providerId: metadata.providerId,
+    });
+  }
+}
+
+function rejectPortableModelOnNativeSpawn(
   item: Record<string, unknown>,
   metadata: PortableTransformationMetadata,
   fieldPath: string
+): void {
+  if (!metadata.portableTargetModels?.length) return;
+  if (typeof item.arguments !== "string" || item.arguments.length === 0) return;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(item.arguments);
+  } catch {
+    return;
+  }
+  const model = isRecord(parsed) ? parsed.model : null;
+  if (typeof model === "string" && metadata.portableTargetModels.includes(model)) {
+    throw new PortableCompatibilityError("malformed_response", {
+      fieldPath: `${fieldPath}.arguments.model`,
+      providerId: metadata.providerId,
+    });
+  }
+}
+
+function restoreFunctionCall(
+  item: Record<string, unknown>,
+  metadata: PortableTransformationMetadata,
+  fieldPath: string,
+  validateArguments = true
 ): RestoredFunctionCall | null {
   if (item.type !== "function_call" && item.type !== "custom_tool_call") return null;
 
@@ -130,6 +190,12 @@ function restoreFunctionCall(
   const name = item.name;
 
   if (namespace === ORIGINAL_COLLABORATION_NAMESPACE) {
+    if (metadata.toolPresentation === "duplicate") {
+      if (name === "spawn_agent") {
+        rejectPortableModelOnNativeSpawn(item, metadata, fieldPath);
+      }
+      return { identity: canonicalIdentity(namespace, name), restored: false };
+    }
     const mapped = metadata.toolMappings.some(
       (mapping) => mapping.originalNamespace === namespace && mapping.originalName === name
     );
@@ -143,6 +209,34 @@ function restoreFunctionCall(
       );
     }
     return { identity: canonicalIdentity(namespace, name), restored: false };
+  }
+  const flattenedOriginalName =
+    namespace === null && name.startsWith(`${ORIGINAL_COLLABORATION_NAMESPACE}.`)
+      ? name.slice(ORIGINAL_COLLABORATION_NAMESPACE.length + 1)
+      : namespace === null && name.startsWith(`${ORIGINAL_COLLABORATION_NAMESPACE}__`)
+        ? name.slice(ORIGINAL_COLLABORATION_NAMESPACE.length + 2)
+        : null;
+  if (metadata.toolPresentation === "duplicate" && flattenedOriginalName) {
+    if (flattenedOriginalName === "spawn_agent") {
+      rejectPortableModelOnNativeSpawn(item, metadata, fieldPath);
+    }
+    return {
+      identity: canonicalIdentity(ORIGINAL_COLLABORATION_NAMESPACE, flattenedOriginalName),
+      restored: false,
+    };
+  }
+  if (
+    metadata.toolPresentation === "duplicate" &&
+    namespace === null &&
+    isCollaborationAction(name)
+  ) {
+    if (name === "spawn_agent") {
+      rejectPortableModelOnNativeSpawn(item, metadata, fieldPath);
+    }
+    return {
+      identity: canonicalIdentity(ORIGINAL_COLLABORATION_NAMESPACE, name),
+      restored: false,
+    };
   }
   if (namespace === null && name.startsWith(`${ORIGINAL_COLLABORATION_NAMESPACE}__`)) {
     const originalName = name.slice(ORIGINAL_COLLABORATION_NAMESPACE.length + 2);
@@ -203,12 +297,18 @@ function restoreFunctionCall(
     style === "omitted",
     style === "omitted" ? undefined : PORTABLE_COLLABORATION_NAMESPACE
   );
+  if (mapping.originalName === "spawn_agent") {
+    validatePortableSpawnTarget(item, metadata, fieldPath, validateArguments);
+  }
   if (style === "double") {
     delete item.namespace;
     item.name = `${mapping.originalNamespace}__${mapping.originalName}`;
   } else {
     item.namespace = mapping.originalNamespace;
     item.name = mapping.originalName;
+  }
+  if (item.type === "function_call" && isCollaborationAction(mapping.originalName)) {
+    item.encrypted_function_args = [];
   }
   return {
     identity: canonicalIdentity(mapping.originalNamespace, mapping.originalName),
@@ -370,7 +470,12 @@ export function restorePortableCompatibilityEventPayload(
         providerId: metadata.providerId,
       });
     }
-    const restoredCall = restoreFunctionCall(restoredPayload.item, metadata, "event.item");
+    const restoredCall = restoreFunctionCall(
+      restoredPayload.item,
+      metadata,
+      "event.item",
+      eventType === "response.output_item.done"
+    );
     if (!restoredCall) return { payload: restoredPayload, restoredCount: 0 };
 
     const keys = [

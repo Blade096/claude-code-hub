@@ -33,7 +33,7 @@ function makeRequest(overrides: Record<string, unknown> = {}): Record<string, un
         recipient: "/root/worker",
         content: [
           { type: "input_text", text: "Message Type: NEW_TASK\nPayload:\n" },
-          { type: "encrypted_content", encrypted_content: "Implement the bounded worker task." },
+          { type: "input_text", text: "Implement the bounded worker task." },
         ],
         internal_chat_message_metadata_passthrough: { turn_id: "turn_1" },
       },
@@ -42,7 +42,22 @@ function makeRequest(overrides: Record<string, unknown> = {}): Record<string, un
   };
 }
 
-function makeSession(message: Record<string, unknown>): ProxySession {
+function makeSession(
+  message: Record<string, unknown>,
+  providers: Provider[] = [
+    {
+      id: 84,
+      name: "portable-child-provider",
+      isEnabled: true,
+      providerType: "codex",
+      codexMultiAgentV2Mode: "portable",
+      allowedModels: [
+        { matchType: "exact", pattern: "deepseek-flash" },
+        { matchType: "exact", pattern: "glm-5" },
+      ],
+    } as Provider,
+  ]
+): ProxySession {
   let portableMetadata: PortableTransformationMetadata | null = null;
   return {
     originalFormat: "response",
@@ -51,6 +66,7 @@ function makeSession(message: Record<string, unknown>): ProxySession {
     userAgent: "Codex Desktop/1.2.3",
     request: { message, model: "requested-model" },
     getCurrentModel: () => "actual-model",
+    getProvidersSnapshot: async () => providers,
     getPortableTransformationMetadata: () => portableMetadata,
     setPortableTransformationMetadata: (metadata: PortableTransformationMetadata | null) => {
       portableMetadata = metadata;
@@ -115,6 +131,12 @@ describe("Codex MultiAgentV2 portable request codec", () => {
       request,
     });
     if (mode === "native") {
+      if (action !== "spawn_agent") {
+        expect(result).toEqual({ request, metadata: null });
+        expect(result.request).toBe(request);
+        expect(request).toEqual(before);
+        return;
+      }
       expect(result.request).not.toBe(request);
       const nativeTools =
         location === "tools"
@@ -122,16 +144,27 @@ describe("Codex MultiAgentV2 portable request codec", () => {
           : ((result.request.input as Array<Record<string, unknown>>)[0].tools as Array<
               Record<string, unknown>
             >);
-      expect(nativeTools[0].name).toBe("collaboration-optimize");
-      const nativeTool = (nativeTools[0].tools as Array<Record<string, unknown>>)[0];
-      const nativeMessage = (
-        (nativeTool.parameters as Record<string, unknown>).properties as Record<string, unknown>
+      expect(nativeTools).toHaveLength(2);
+      expect(nativeTools[0]).toEqual(namespace);
+      expect(nativeTools[1].name).toBe("collaboration-optimize");
+      const portableTool = (nativeTools[1].tools as Array<Record<string, unknown>>)[0];
+      expect(portableTool.name).toBe("spawn_portable_agent");
+      const portableMessage = (
+        (portableTool.parameters as Record<string, unknown>).properties as Record<string, unknown>
       ).message;
-      expect(nativeMessage).not.toHaveProperty("encrypted");
+      expect(portableMessage).not.toHaveProperty("encrypted");
+      expect(portableTool).toMatchObject({
+        parameters: {
+          properties: {
+            model: { type: "string", enum: ["deepseek-flash", "glm-5"] },
+          },
+        },
+      });
       expect(result.metadata).toMatchObject({
         toolMappings: [
           {
             encodedNamespace: "collaboration-optimize",
+            encodedName: "spawn_portable_agent",
             originalNamespace: "collaboration",
             originalName: action,
           },
@@ -166,6 +199,91 @@ describe("Codex MultiAgentV2 portable request codec", () => {
       "collaboration_namespace",
     ]);
     expect(request).toEqual(before);
+  });
+
+  test("keeps the native spawn tool and adds one shared portable plaintext tool", async () => {
+    const request = makeRequest({ input: [] });
+    const nativeNamespace = structuredClone((request.tools as Array<Record<string, unknown>>)[0]);
+
+    const result = await preparePortableCompatibilityRequest({
+      session: makeSession(request),
+      provider: makeProvider("native"),
+      request,
+    });
+
+    const tools = result.request.tools as Array<Record<string, unknown>>;
+    expect(tools).toHaveLength(2);
+    expect(tools[0]).toEqual(nativeNamespace);
+
+    const portableNamespace = tools[1];
+    expect(portableNamespace.name).toBe("collaboration-optimize");
+    const portableSpawns = portableNamespace.tools as Array<Record<string, unknown>>;
+    expect(portableSpawns).toHaveLength(1);
+    expect(portableSpawns.map((tool) => tool.name)).toEqual(["spawn_portable_agent"]);
+    const portableSpawn = portableSpawns[0];
+    const portableMessage = (
+      (portableSpawn.parameters as Record<string, unknown>).properties as Record<string, unknown>
+    ).message;
+    expect(portableMessage).toEqual({ type: "string", minLength: 1 });
+    expect(portableSpawn).toMatchObject({
+      parameters: {
+        required: ["message", "model"],
+        properties: {
+          model: { type: "string", enum: ["deepseek-flash", "glm-5"] },
+        },
+      },
+    });
+    expect(result.metadata?.toolMappings).toEqual([
+      {
+        encodedNamespace: "collaboration-optimize",
+        encodedName: "spawn_portable_agent",
+        originalNamespace: "collaboration",
+        originalName: "spawn_agent",
+      },
+    ]);
+  });
+
+  test("only exposes portable target models visible to the authenticated provider group", async () => {
+    const request = makeRequest({ input: [] });
+    const providers = [
+      {
+        id: 84,
+        name: "other-group",
+        isEnabled: true,
+        providerType: "codex",
+        codexMultiAgentV2Mode: "portable",
+        groupTag: "team-b",
+        allowedModels: [{ matchType: "exact", pattern: "deepseek-flash" }],
+      } as Provider,
+      {
+        id: 85,
+        name: "visible-group",
+        isEnabled: true,
+        providerType: "codex",
+        codexMultiAgentV2Mode: "portable",
+        groupTag: "team-a",
+        allowedModels: [{ matchType: "exact", pattern: "glm-5" }],
+      } as Provider,
+    ];
+    const session = makeSession(request, providers);
+    session.authState = {
+      key: { providerGroup: "team-a" },
+      user: null,
+    } as ProxySession["authState"];
+
+    const result = await preparePortableCompatibilityRequest({
+      session,
+      provider: makeProvider("native"),
+      request,
+    });
+
+    const namespaces = result.request.tools as Array<Record<string, unknown>>;
+    const portableTools = namespaces[1].tools as Array<Record<string, unknown>>;
+    expect(portableTools.map((tool) => tool.name)).toEqual(["spawn_portable_agent"]);
+    expect(portableTools[0]).toMatchObject({
+      parameters: { properties: { model: { type: "string", enum: ["glm-5"] } } },
+    });
+    expect(result.metadata?.portableTargetModels).toEqual(["glm-5"]);
   });
 
   test("prepares spawn_agent without mutating the session request", async () => {
@@ -308,17 +426,17 @@ describe("Codex MultiAgentV2 portable request codec", () => {
     ).rejects.toMatchObject({ compatibilityCode: "name_collision" });
   });
 
-  test("converts single and mixed agent-message content without reordering other parts", async () => {
+  test("converts single and mixed plaintext agent-message content without reordering", async () => {
     const mixedContent = [
       { type: "input_text", text: "prefix", marker: 1 },
-      { type: "encrypted_content", encrypted_content: "Readable delegated task.", marker: 2 },
+      { type: "input_text", text: "Readable delegated task.", marker: 2 },
       { type: "input_image", image_url: "data:image/png;base64,AA==", marker: 3 },
     ];
     const request = makeRequest({
       input: [
         {
           type: "agent_message",
-          content: [{ type: "encrypted_content", encrypted_content: "Single readable task." }],
+          content: [{ type: "input_text", text: "Single readable task." }],
         },
         { type: "message", role: "user", content: [{ type: "input_text", text: "already" }] },
         { type: "agent_message", role: "user", content: mixedContent },
@@ -331,7 +449,7 @@ describe("Codex MultiAgentV2 portable request codec", () => {
     });
     const input = result.request.input as Array<Record<string, unknown>>;
 
-    expect(input[0]).toEqual({
+    expect(input[0]).toMatchObject({
       type: "message",
       role: "user",
       content: [{ type: "input_text", text: "Single readable task." }],
@@ -348,7 +466,34 @@ describe("Codex MultiAgentV2 portable request codec", () => {
     ]);
   });
 
-  test("converts readable agent-message content for a native child after root schema preparation", async () => {
+  test("preserves encrypted agent-message content for a native child", async () => {
+    const request = makeRequest({
+      input: [
+        {
+          type: "agent_message",
+          id: "amsg_native",
+          author: "/root",
+          recipient: "/root/native-worker",
+          content: [{ type: "encrypted_content", encrypted_content: "opaque-native-payload" }],
+        },
+      ],
+    });
+    const before = structuredClone(request);
+
+    const result = await preparePortableCompatibilityRequest({
+      session: makeSession(request),
+      provider: makeProvider("native"),
+      request,
+    });
+    expect(result.request.input).toEqual(before.input);
+    expect(result.metadata?.transformations).toEqual([
+      "spawn_agent_message_schema",
+      "collaboration_namespace",
+    ]);
+    expect(request).toEqual(before);
+  });
+
+  test("preserves official plaintext agent-message content for a native root", async () => {
     const request = makeRequest();
     const before = structuredClone(request);
 
@@ -357,20 +502,11 @@ describe("Codex MultiAgentV2 portable request codec", () => {
       provider: makeProvider("native"),
       request,
     });
-    const input = result.request.input as Array<Record<string, unknown>>;
 
-    expect(input[0]).toMatchObject({
-      type: "message",
-      role: "user",
-      content: [
-        { type: "input_text", text: "Message Type: NEW_TASK\nPayload:\n" },
-        { type: "input_text", text: "Implement the bounded worker task." },
-      ],
-    });
+    expect(result.request.input).toEqual(before.input);
     expect(result.metadata?.transformations).toEqual([
       "spawn_agent_message_schema",
       "collaboration_namespace",
-      "agent_message_input",
     ]);
     expect(request).toEqual(before);
   });
@@ -404,6 +540,141 @@ describe("Codex MultiAgentV2 portable request codec", () => {
     expect(request).toEqual(before);
   });
 
+  test("accepts an official plaintext agent message for a portable child", async () => {
+    const request = makeRequest({
+      client_metadata: {
+        "x-openai-subagent": "worker",
+        "x-codex-parent-thread-id": "parent-thread",
+      },
+      tools: [{ type: "function", name: "exec_command", parameters: { type: "object" } }],
+      input: [
+        {
+          type: "agent_message",
+          author: "/root",
+          recipient: "/root/portable-worker",
+          content: [
+            { type: "input_text", text: "Message Type: NEW_TASK\nPayload:\n" },
+            { type: "input_text", text: "Review the bounded change." },
+          ],
+        },
+      ],
+    });
+
+    const result = await preparePortableCompatibilityRequest({
+      session: makeSession(request),
+      provider: makeProvider("portable"),
+      request,
+    });
+
+    expect(result.request.input).toEqual([
+      {
+        type: "message",
+        role: "user",
+        author: "/root",
+        recipient: "/root/portable-worker",
+        content: [
+          { type: "input_text", text: "Message Type: NEW_TASK\nPayload:\n" },
+          { type: "input_text", text: "Review the bounded change." },
+        ],
+      },
+    ]);
+    expect(result.metadata?.transformations).toEqual(["agent_message_input"]);
+  });
+
+  test.each([
+    ["保留本地明文标记", { encrypted_function_args: [] }],
+    ["自定义 Provider 已清除本地明文标记", {}],
+  ])("restores a replayed plaintext collaboration call when %s", async (_label, marker) => {
+    const request = makeRequest({
+      input: [
+        {
+          type: "function_call",
+          call_id: "call_portable",
+          namespace: "collaboration",
+          name: "spawn_agent",
+          arguments: JSON.stringify({
+            model: "deepseek-flash",
+            message: "Review the bounded change.",
+          }),
+          ...marker,
+        },
+        {
+          type: "function_call_output",
+          call_id: "call_portable",
+          output: "accepted",
+        },
+      ],
+    });
+
+    const result = await preparePortableCompatibilityRequest({
+      session: makeSession(request),
+      provider: makeProvider("native"),
+      request,
+    });
+    const input = result.request.input as Array<Record<string, unknown>>;
+
+    expect(input[0]).toMatchObject({
+      namespace: "collaboration-optimize",
+      name: "spawn_portable_agent",
+    });
+    expect(input[0]).not.toHaveProperty("encrypted_function_args");
+    expect(input[1]).toEqual((request.input as Array<Record<string, unknown>>)[1]);
+  });
+
+  test("restores portable-provider collaboration history after Codex strips local markers", async () => {
+    const request = makeRequest({
+      tools: [spawnAgentNamespace("send_message")],
+      input: [
+        {
+          type: "function_call",
+          call_id: "call_portable_root",
+          namespace: "collaboration",
+          name: "send_message",
+          arguments: JSON.stringify({ target: "/root/worker", message: "Continue." }),
+        },
+      ],
+    });
+
+    const result = await preparePortableCompatibilityRequest({
+      session: makeSession(request),
+      provider: makeProvider("portable"),
+      request,
+    });
+    const input = result.request.input as Array<Record<string, unknown>>;
+
+    expect(input[0]).toMatchObject({
+      namespace: "collaboration-optimize",
+      name: "send_message",
+    });
+    expect(input[0]).not.toHaveProperty("encrypted_function_args");
+  });
+
+  test("rejects encrypted history for a portable model", async () => {
+    const request = makeRequest({
+      input: [
+        {
+          type: "function_call",
+          call_id: "call_encrypted_portable",
+          namespace: "collaboration",
+          name: "spawn_agent",
+          arguments: JSON.stringify({
+            model: "deepseek-flash",
+            message: "opaque-native-message",
+          }),
+          encrypted_function_args: ["message"],
+        },
+      ],
+    });
+
+    await expect(
+      preparePortableCompatibilityRequest({
+        session: makeSession(request),
+        provider: makeProvider("native"),
+        request,
+      })
+    ).rejects.toMatchObject({ compatibilityCode: "opaque_content" });
+  });
+
   test.each([
     [
       "wrong role",
@@ -411,11 +682,6 @@ describe("Codex MultiAgentV2 portable request codec", () => {
       "client_or_protocol_mismatch",
     ],
     ["missing content", { type: "agent_message" }, "client_or_protocol_mismatch"],
-    [
-      "already-consumed agent message",
-      { type: "agent_message", content: [{ type: "input_text", text: "task" }] },
-      "client_or_protocol_mismatch",
-    ],
     [
       "missing encrypted value",
       { type: "agent_message", content: [{ type: "encrypted_content" }] },

@@ -21,7 +21,7 @@ Portable 是协议兼容转换，不是解密。它只处理已经可读的 Code
 
 | 模式 | 行为 | 适用条件 |
 | --- | --- | --- |
-| `native` | 总开关开启时，根请求会准备 collaboration 工具 schema 与命名空间，使 Codex 后续生成可读的委派消息；携带可读伪密文的 child envelope 会规范化为 `message/input_text`，真正不透明的原生密文保持原样透传 | OpenAI 原生端点，或已经完整支持 Codex MultiAgentV2 child 协议的端点 |
+| `native` | 原始 `collaboration` 工具、`message.encrypted=true`、原生函数调用和 native `agent_message` 保持不变；总开关开启且当前分组存在明确的 portable 精确模型时，额外增加公共明文 `spawn_portable_agent` 工具 | OpenAI 原生端点，或已经完整支持 Codex MultiAgentV2 child 协议的端点 |
 | `portable` | 在总开关开启且请求被可靠识别后，转换协作结构并恢复响应 | 明确支持 Responses API，但不支持 Codex opaque wrapper 的第三方端点 |
 | `disabled` | 明确拒绝该 Provider 上的 MultiAgentV2 协作请求 | 未验收、数据策略不允许明文或已知不兼容的端点 |
 
@@ -35,6 +35,18 @@ Portable 是协议兼容转换，不是解密。它只处理已经可读的 Code
 4. 在隔离环境开启总开关，运行本文的真实 qualification。确认机器证据、usage log 和普通日志后再逐步放量。
 
 系统总开关关闭、Provider 为 `disabled`、客户端/协议不匹配、opaque content、名称冲突、恢复失败和传输能力不足都会 fail closed。Portable compatibility 错误不会自动切换 Provider、不会改走另一种协议、不会降级 MultiAgentV1，也不会携带任务正文重试到其他 Provider。例外仅是 OpenAI native Responses WebSocket 原本已有的 WebSocket 到 HTTP 回退，它不是 portable Provider 的兜底路径。
+
+### 2.1 同一 native 根会话的公共 portable 工具
+
+当 native 根请求带官方 collaboration namespace 时，CCH 保留整套原生工具，并根据当前认证分组内启用的 portable Provider 生成额外的 `collaboration-optimize.spawn_portable_agent`。只有 `allowedModels` 中的精确规则会进入该工具的 `model` 枚举；空白白名单、前缀、包含和正则规则不会自动展开成目标。
+
+上游选择公共 portable 工具后，CCH 校验 `model` 是否属于本次请求公布的枚举，再恢复为 `collaboration.spawn_agent` 并添加 `encrypted_function_args: []`。选择原生 `collaboration.spawn_agent` 时不会添加该标记；若原生工具却填写 portable-only 模型，请求会明确失败，不会把已经生成的密文改送第三方 Provider。
+
+`encrypted_function_args: []` 是 Codex 本地分流信号，不是可依赖的持久路由字段。Codex 使用自定义 Responses Provider 时可能在下一轮历史重放前清除它。因此 CCH 会根据 `model` 是否属于本次 portable 枚举恢复工具身份，并在把历史发回上游前移除该本地标记；带非空加密字段列表的 portable 目标历史仍会 fail closed。
+
+Codex 子请求也按消息类型强制分流：带 `input_text` 的当前 child envelope 只允许 portable Provider，带 `encrypted_content` 的当前 child envelope 只允许 native Provider。该限制同时适用于模型白名单为空的 Provider，避免宽泛 native Provider 抢到 portable 子请求。
+
+当前同根扩展只开放公共的 `spawn_portable_agent`。native 根面向 portable child 的 `send_message` 与 `followup_task` 需要可恢复的 root/thread/call/target 关联，在该状态模块完成前不会生成明文别名。不要把本阶段标记为完整生命周期生产验收通过。
 
 ## 3. HTTP/SSE、fake streaming 与 compaction
 
@@ -82,6 +94,7 @@ bun run test:e2e:portable-qualification
 Harness 会执行以下真实场景：
 
 - native OpenAI 根 Agent 分别委派 DeepSeek 类与 GLM 类 portable child。
+- native OpenAI 根 Agent 委派同一 native GPT Provider 的 GPT child，并完成 `spawn_agent`、运行中的 `send_message` 和完成后的 `followup_task`；这条用例是部署前阻断项，用于防止第三方兼容转换破坏 GPT→GPT。
 - 每类 Provider 都完成 `spawn_agent`、运行中的 `send_message`、完成后的 `followup_task`，且父 Agent 收到两轮结果。
 - 每类 Provider 都验证 `fork_turns=none`、最近一轮和 `all`，使用只存在于已完成父轮次的随机 marker 判断历史边界。
 - 每类 Provider 验证 HTTP non-stream 与 SSE；不生成 portable WebSocket 用例。

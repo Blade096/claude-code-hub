@@ -334,6 +334,7 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
           "send_message_message_schema",
           "followup_task_message_schema",
           "collaboration_namespace",
+          "spawn_agent_routing_instruction",
         ].every((transformation) =>
           nativePreparationAudit.transformations.includes(transformation)
         ) && !nativePreparationAudit.transformations.includes("agent_message_input"),

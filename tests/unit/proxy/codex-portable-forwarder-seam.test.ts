@@ -605,6 +605,7 @@ describe("portable compatibility proxy seams", () => {
     expect(session.getPortableTransformationMetadata()?.transformations).toEqual([
       "spawn_agent_message_schema",
       "collaboration_namespace",
+      "spawn_agent_routing_instruction",
     ]);
     expect(session.getSpecialSettings()).toHaveLength(1);
   });

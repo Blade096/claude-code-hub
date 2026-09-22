@@ -40,6 +40,8 @@ Portable 是协议兼容转换，不是解密。它只处理已经可读的 Code
 
 当 native 根请求带官方 collaboration namespace 时，CCH 保留整套原生工具，并根据当前认证分组内启用的 portable Provider 生成额外的 `collaboration-optimize.spawn_portable_agent`。只有 `allowedModels` 中的精确规则会进入该工具的 `model` 枚举；空白白名单、前缀、包含和正则规则不会自动展开成目标。
 
+`collaboration.spawn_agent` 是上游保留工具，它的名称、说明和参数 schema 必须原样保留。CCH 不修改这个工具，而是在本次 Responses 请求的 `instructions` 中追加模型分流规则：枚举内的模型必须选择公共 portable 工具，其他模型继续选择原生工具。审计中的 `spawn_agent_routing_instruction` 表示这条规则已注入；若 native 根请求缺少该记录，不得把 portable child 用例判为通过。
+
 上游选择公共 portable 工具后，CCH 校验 `model` 是否属于本次请求公布的枚举，再恢复为 `collaboration.spawn_agent` 并添加 `encrypted_function_args: []`。选择原生 `collaboration.spawn_agent` 时不会添加该标记；若原生工具却填写 portable-only 模型，请求会明确失败，不会把已经生成的密文改送第三方 Provider。
 
 `encrypted_function_args: []` 是 Codex 本地分流信号，不是可依赖的持久路由字段。Codex 使用自定义 Responses Provider 时可能在下一轮历史重放前清除它。因此 CCH 会根据 `model` 是否属于本次 portable 枚举恢复工具身份，并在把历史发回上游前移除该本地标记；带非空加密字段列表的 portable 目标历史仍会 fail closed。

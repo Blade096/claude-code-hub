@@ -22,6 +22,7 @@ export type PortableTransformation =
   | "spawn_agent_message_schema"
   | "send_message_message_schema"
   | "followup_task_message_schema"
+  | "spawn_agent_routing_instruction"
   | "collaboration_namespace"
   | "collaboration_history"
   | "agent_message_input";

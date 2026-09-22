@@ -25,6 +25,7 @@ import {
 
 const ORIGINAL_COLLABORATION_NAMESPACE = CODEX_COLLABORATION_NAMESPACE;
 const PORTABLE_SPAWN_TOOL_NAME = "spawn_portable_agent";
+const PORTABLE_ROUTING_INSTRUCTION_PREFIX = "CCH portable child-model routing rule:";
 const PORTABLE_REQUEST_METADATA = Symbol("codex-portable-request-metadata");
 const COLLABORATION_ACTIONS = new Set<string>(PORTABLE_COLLABORATION_ACTIONS);
 
@@ -206,6 +207,34 @@ function collectCollaborationToolTargets(
   return targets;
 }
 
+function appendRoutingDescription(existing: unknown, sentence: string): string {
+  const prefix = typeof existing === "string" ? existing.trim() : "";
+  return prefix.length > 0 ? `${prefix} ${sentence}` : sentence;
+}
+
+function injectPortableSpawnRoutingInstruction(
+  request: Record<string, unknown>,
+  portableTargetModels: string[],
+  providerId: number
+): string {
+  const portableList = portableTargetModels.join(", ");
+  const text = `${PORTABLE_ROUTING_INSTRUCTION_PREFIX} If model is exactly one of [${portableList}], you must call ${PORTABLE_COLLABORATION_NAMESPACE}.${PORTABLE_SPAWN_TOOL_NAME}; never call ${ORIGINAL_COLLABORATION_NAMESPACE}.spawn_agent for those model values. For every other model, use ${ORIGINAL_COLLABORATION_NAMESPACE}.spawn_agent.`;
+  if (request.instructions === undefined) {
+    request.instructions = text;
+    return "instructions";
+  }
+  if (typeof request.instructions !== "string") {
+    throw new PortableCompatibilityError("client_or_protocol_mismatch", {
+      fieldPath: "instructions",
+      providerId,
+    });
+  }
+  if (!request.instructions.includes(PORTABLE_ROUTING_INSTRUCTION_PREFIX)) {
+    request.instructions = `${request.instructions.trimEnd()}\n\n${text}`;
+  }
+  return "instructions";
+}
+
 function rewriteCollaborationTools(
   request: Record<string, unknown>,
   providerId: number,
@@ -260,6 +289,11 @@ function rewriteCollaborationTools(
           }
           const portableTool = structuredClone(tool);
           portableTool.name = PORTABLE_SPAWN_TOOL_NAME;
+          const portableList = portableTargetModels.join(", ");
+          portableTool.description = appendRoutingDescription(
+            portableTool.description,
+            `Use this plaintext compatibility tool when model is one of: ${portableList}.`
+          );
           const parameters = portableTool.parameters as Record<string, unknown>;
           const properties = parameters.properties as Record<string, unknown>;
           const message = properties.message as Record<string, unknown>;
@@ -305,8 +339,18 @@ function rewriteCollaborationTools(
     transformations.push(`${action}_message_schema` as PortableTransformation);
   }
   if (mappings.length > 0) transformations.push("collaboration_namespace");
+  const routingPath =
+    strategy === "duplicate" && portableSpawnEnabled
+      ? injectPortableSpawnRoutingInstruction(request, portableTargetModels, providerId)
+      : null;
+  if (routingPath) transformations.push("spawn_agent_routing_instruction");
 
-  return { strategy, mappings, paths: targets.map((target) => target.path), transformations };
+  return {
+    strategy,
+    mappings,
+    paths: [...targets.map((target) => target.path), ...(routingPath ? [routingPath] : [])],
+    transformations,
+  };
 }
 
 async function resolvePortableTargetModels(

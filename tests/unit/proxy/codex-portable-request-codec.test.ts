@@ -169,7 +169,11 @@ describe("Codex MultiAgentV2 portable request codec", () => {
             originalName: action,
           },
         ],
-        transformations: [`${action}_message_schema`, "collaboration_namespace"],
+        transformations: [
+          `${action}_message_schema`,
+          "collaboration_namespace",
+          "spawn_agent_routing_instruction",
+        ],
       });
       expect(request).toEqual(before);
       return;
@@ -221,6 +225,7 @@ describe("Codex MultiAgentV2 portable request codec", () => {
     expect(portableSpawns).toHaveLength(1);
     expect(portableSpawns.map((tool) => tool.name)).toEqual(["spawn_portable_agent"]);
     const portableSpawn = portableSpawns[0];
+    expect(portableSpawn.description).toContain("deepseek-flash");
     const portableMessage = (
       (portableSpawn.parameters as Record<string, unknown>).properties as Record<string, unknown>
     ).message;
@@ -241,6 +246,37 @@ describe("Codex MultiAgentV2 portable request codec", () => {
         originalName: "spawn_agent",
       },
     ]);
+    expect(result.request.input).toEqual([]);
+    expect(result.request.instructions).toEqual(
+      expect.stringContaining("collaboration-optimize.spawn_portable_agent")
+    );
+    expect(result.metadata?.transformations).toContain("spawn_agent_routing_instruction");
+  });
+
+  test("appends the portable routing rule to existing instructions exactly once", async () => {
+    const request = makeRequest({ input: [], instructions: "Keep the existing instruction." });
+    const session = makeSession(request);
+
+    const first = await preparePortableCompatibilityRequest({
+      session,
+      provider: makeProvider("native"),
+      request,
+    });
+    const second = await preparePortableCompatibilityRequest({
+      session,
+      provider: makeProvider("native"),
+      request: first.request,
+    });
+
+    expect(first.request.instructions).toEqual(
+      expect.stringMatching(
+        /^Keep the existing instruction\.\n\nCCH portable child-model routing rule:/u
+      )
+    );
+    expect(
+      (second.request.instructions as string).match(/CCH portable child-model routing rule:/gu)
+    ).toHaveLength(1);
+    expect(second.request).toBe(first.request);
   });
 
   test("only exposes portable target models visible to the authenticated provider group", async () => {
@@ -489,6 +525,7 @@ describe("Codex MultiAgentV2 portable request codec", () => {
     expect(result.metadata?.transformations).toEqual([
       "spawn_agent_message_schema",
       "collaboration_namespace",
+      "spawn_agent_routing_instruction",
     ]);
     expect(request).toEqual(before);
   });
@@ -507,6 +544,7 @@ describe("Codex MultiAgentV2 portable request codec", () => {
     expect(result.metadata?.transformations).toEqual([
       "spawn_agent_message_schema",
       "collaboration_namespace",
+      "spawn_agent_routing_instruction",
     ]);
     expect(request).toEqual(before);
   });
@@ -536,6 +574,7 @@ describe("Codex MultiAgentV2 portable request codec", () => {
     expect(result.metadata?.transformations).toEqual([
       "spawn_agent_message_schema",
       "collaboration_namespace",
+      "spawn_agent_routing_instruction",
     ]);
     expect(request).toEqual(before);
   });

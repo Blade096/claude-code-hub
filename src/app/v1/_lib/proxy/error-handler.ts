@@ -31,6 +31,7 @@ import {
 import { translateProxyError } from "./proxy-error-i18n";
 import { ProxyResponses } from "./responses";
 import type { ProxySession } from "./session";
+import { TextTransformError } from "./text-transform";
 
 /** 覆写状态码最小值 */
 const OVERRIDE_STATUS_CODE_MIN = 400;
@@ -293,6 +294,20 @@ export class ProxyErrorHandler {
       );
       return finalResponse;
     };
+
+    if (error instanceof TextTransformError) {
+      return await finalizeErrorResponse(
+        ProxyResponses.buildError(
+          error.statusCode,
+          translateProxyError(
+            `text_transform_${error.reason}`,
+            session.headers.get("accept-language")
+          ),
+          `text_transform_${error.reason}`
+        ),
+        error.message
+      );
+    }
 
     if (isPortableCompatibilityError(error)) {
       const audit = recordPortableFailureAudit(session, error);

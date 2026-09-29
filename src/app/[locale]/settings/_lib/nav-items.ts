@@ -65,6 +65,12 @@ export const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
     iconName: "filter",
   },
   {
+    href: "/settings/text-transform",
+    labelKey: "nav.textTransform",
+    label: "Text Protection",
+    iconName: "shield-alert",
+  },
+  {
     href: "/settings/client-versions",
     labelKey: "nav.clientVersions",
     label: "Client Versions",

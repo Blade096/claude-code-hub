@@ -198,6 +198,78 @@ function bodyText(body: BodyInit | null | undefined): string {
 }
 
 describe("portable compatibility proxy seams", () => {
+  test.each(["/v1/responses", "/v1/responses/compact", "/v1/messages/count_tokens"])(
+    "文本保护覆盖真实发送边界和透传端点 %s",
+    async (path) => {
+      vi.stubEnv(
+        "CCH_TEXT_TRANSFORM",
+        JSON.stringify({
+          enabled: true,
+          rules: [
+            { source: "wingjoy.cn", target: "site-k7m2.b.invalid" },
+            { source: "wingjoy", target: "site-k7m2" },
+          ],
+        })
+      );
+      try {
+        const provider = { ...makeProvider(), codexMultiAgentV2Mode: "native" } as Provider;
+        const session = makeSession(provider, { tools: [], input: "https://wingjoy.cn wingjoy" });
+        session.requestUrl = new URL(`https://proxy.example.com${path}`);
+        Object.assign(session, { endpointPolicy: resolveEndpointPolicy(path) });
+        session.request.buffer = new TextEncoder().encode(
+          JSON.stringify(session.request.message)
+        ).buffer;
+        const original = structuredClone(session.request.message);
+        const fetch = vi
+          .spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode")
+          .mockImplementationOnce(async (_url: string, init: RequestInit) => {
+            const sent = bodyText(init.body);
+            expect(sent).not.toContain("wingjoy");
+            expect(sent).toContain("site-k7m2.b.invalid");
+            return Response.json({
+              output: [
+                {
+                  type: "message",
+                  content: [{ type: "output_text", text: "site-k7m2.b.invalid site-k7m2" }],
+                },
+              ],
+            });
+          });
+        const { doForward } = ProxyForwarder as unknown as {
+          doForward: (s: ProxySession, p: Provider, url: string) => Promise<Response>;
+        };
+        const result = await doForward(session, provider, provider.url);
+        expect(await result.text()).toContain("wingjoy.cn wingjoy");
+        expect(fetch).toHaveBeenCalledOnce();
+        expect(session.request.message).toEqual(original);
+        (session as unknown as { clearResponseTimeout: () => void }).clearResponseTimeout();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    }
+  );
+
+  test("文本保护发生碰撞时在网络发送前终止", async () => {
+    vi.stubEnv(
+      "CCH_TEXT_TRANSFORM",
+      JSON.stringify({ enabled: true, rules: [{ source: "wingjoy", target: "site-k7m2" }] })
+    );
+    try {
+      const provider = { ...makeProvider(), codexMultiAgentV2Mode: "native" } as Provider;
+      const session = makeSession(provider, { tools: [], input: "wingjoy site-k7m2" });
+      const fetch = vi.spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode");
+      const selectAlternative = vi.spyOn(ProxyForwarder as never, "selectAlternative");
+      await expect(ProxyForwarder.send(session)).rejects.toMatchObject({
+        reason: "collision",
+        statusCode: 400,
+      });
+      expect(fetch).not.toHaveBeenCalled();
+      expect(selectAlternative).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.evaluateResponsesWsEligibility.mockReset();

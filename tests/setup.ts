@@ -7,6 +7,12 @@
 import { config } from "dotenv";
 import { afterAll, beforeAll, vi } from "vitest";
 
+// 代理单测默认无后台覆盖；配置服务/仓储测试显式提供自己的存储 mock。
+vi.mock("@/repository/text-transform", () => ({
+  getTextTransformSettings: vi.fn(async () => null),
+  saveTextTransformSettings: vi.fn(async () => null),
+}));
+
 // ==================== 加载环境变量 ====================
 
 // 优先加载 .env.test（如果存在）

@@ -48,7 +48,6 @@ import type {
   SpecialSetting,
 } from "@/types/special-settings";
 import type { SystemSettings } from "@/types/system-config";
-
 import { GeminiAuth } from "../gemini/auth";
 import { GEMINI_PROTOCOL } from "../gemini/protocol";
 import { HeaderProcessor, resolveAnthropicAuthHeaders } from "../headers";
@@ -107,6 +106,11 @@ import { ProxyProviderResolver } from "./provider-selector";
 import { finalizeHedgeLoserBilling } from "./response-handler";
 import type { ProxySession } from "./session";
 import { setDeferredStreamingFinalization } from "./stream-finalization";
+import {
+  prepareTextTransformAttempt,
+  restoreTextResponse,
+  TextTransformError,
+} from "./text-transform";
 import {
   detectThinkingBudgetRectifierTrigger,
   rectifyThinkingBudget,
@@ -1746,7 +1750,7 @@ export class ProxyForwarder {
             await persistSpecialSettings(session);
           }
           session.clearPortableTransformationMetadata?.();
-          if (isPortableCompatibilityError(lastError)) {
+          if (isPortableCompatibilityError(lastError) || lastError instanceof TextTransformError) {
             throw lastError;
           }
 
@@ -2978,6 +2982,20 @@ export class ProxyForwarder {
       }
     }
 
+    // 每次真实发送使用独立配置快照，覆盖 raw passthrough / Gemini / multipart。
+    const textTransform = await prepareTextTransformAttempt({
+      providerId: provider.id,
+      url: proxyUrl,
+      headers: processedHeaders,
+      body: requestBody,
+      language: session.headers.get("accept-language"),
+    });
+    requestBody = textTransform.body;
+    processedHeaders = textTransform.headers;
+    if (textTransform.config && typeof requestBody === "string") {
+      session.forwardedRequestBody = requestBody;
+    }
+
     if (session.shouldPersistSessionDebugArtifacts()) {
       const detailSnapshotSession = session as ProxySessionWithDetailSnapshotRuntime;
       detailSnapshotSession.detailSnapshotRequestAfter = {
@@ -3740,6 +3758,13 @@ export class ProxyForwarder {
       //
       // 正确策略：保留 response timeout 继续监控 body 读取，并在 finally 里清理定时器。
       try {
+        if (textTransform.config) {
+          response = await restoreTextResponse(
+            response,
+            textTransform.config,
+            session.headers.get("accept-language")
+          );
+        }
         throw await ProxyError.fromUpstreamResponse(response, {
           id: provider.id,
           name: provider.name,
@@ -3797,7 +3822,19 @@ export class ProxyForwarder {
       cleanupCombinedSignal();
     };
 
-    return response;
+    try {
+      return textTransform.config
+        ? await restoreTextResponse(
+            response,
+            textTransform.config,
+            session.headers.get("accept-language")
+          )
+        : response;
+    } catch (error) {
+      sessionWithTimeout.clearResponseTimeout?.();
+      sessionWithTimeout.releaseAgent?.();
+      throw error;
+    }
   }
 
   /**
@@ -4319,10 +4356,15 @@ export class ProxyForwarder {
         await persistSpecialSettings(attempt.session);
       }
       attempt.session.clearPortableTransformationMetadata?.();
-      if (isPortableCompatibilityError(error)) {
+      if (isPortableCompatibilityError(error) || error instanceof TextTransformError) {
         attempt.settled = true;
         attempts.delete(attempt);
-        abortAllAttempts(attempt, "portable_compatibility_error");
+        abortAllAttempts(
+          attempt,
+          error instanceof TextTransformError
+            ? "text_transform_error"
+            : "portable_compatibility_error"
+        );
         await settleFailure(error);
         return;
       }

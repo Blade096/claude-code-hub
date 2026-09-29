@@ -23,6 +23,14 @@ import type { IpExtractionConfig } from "@/types/ip-extraction";
 import type { AuditCategory } from "@/types/audit-log";
 
 // Enums
+// 单行后台文本保护配置；不存在记录时继承环境配置。
+export const textTransformSettings = pgTable('text_transform_settings', {
+  id: integer('id').primaryKey().default(1),
+  config: jsonb('config').notNull(),
+  revision: integer('revision').notNull().default(1),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const dailyResetModeEnum = pgEnum('daily_reset_mode', ['fixed', 'rolling']);
 export const webhookProviderTypeEnum = pgEnum('webhook_provider_type', [
   'wechat',

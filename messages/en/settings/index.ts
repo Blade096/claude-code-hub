@@ -9,6 +9,7 @@ import nav from "./nav.json";
 import notifications from "./notifications.json";
 import prices from "./prices.json";
 import requestFilters from "./requestFilters.json";
+import textTransform from "./textTransform.json";
 import sensitiveWords from "./sensitiveWords.json";
 import statusPage from "./statusPage.json";
 import strings from "./strings.json";
@@ -110,6 +111,7 @@ export default {
   prices,
   sensitiveWords,
   requestFilters,
+  textTransform,
   logs,
   data,
   clientVersions,

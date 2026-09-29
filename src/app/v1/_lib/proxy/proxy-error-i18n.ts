@@ -17,6 +17,12 @@ const SUPPORTED_LOCALES: ProxyErrorLocale[] = ["zh-CN", "zh-TW", "en", "ja", "ru
 const DEFAULT_LOCALE: ProxyErrorLocale = "zh-CN";
 
 export type ProxyErrorCode =
+  | "text_transform_unavailable"
+  | "text_transform_config"
+  | "text_transform_collision"
+  | "text_transform_residual"
+  | "text_transform_unsupported"
+  | "text_transform_response"
   | "remote_compaction_failed"
   | "compatibility_feature_disabled"
   | "compatibility_provider_disabled"
@@ -27,6 +33,48 @@ export type ProxyErrorCode =
   | "compatibility_transport_unsupported";
 
 const PROXY_ERROR_MESSAGES: Record<ProxyErrorCode, Record<ProxyErrorLocale, string>> = {
+  text_transform_unavailable: {
+    "zh-CN": "无法读取文本保护配置，请稍后重试。请求未发送。",
+    "zh-TW": "無法讀取文字保護設定，請稍後重試。請求未傳送。",
+    en: "Text protection settings are unavailable. Please retry. Request not sent.",
+    ja: "テキスト保護設定を取得できません。再試行してください。未送信です。",
+    ru: "Настройки защиты текста недоступны. Повторите запрос. Запрос не отправлен.",
+  },
+  text_transform_config: {
+    "zh-CN": "文本保护配置无效，请检查映射规则。",
+    "zh-TW": "文字保護設定無效，請檢查對應規則。",
+    en: "Invalid text protection configuration. Check the mapping rules.",
+    ja: "テキスト保護の設定が無効です。置換ルールを確認してください。",
+    ru: "Недопустимая конфигурация защиты текста. Проверьте правила замены.",
+  },
+  text_transform_collision: {
+    "zh-CN": "请求文本已包含保留代称，请调整文本或映射规则。请求未发送。",
+    "zh-TW": "請求文字已包含保留代稱，請調整文字或對應規則。請求未傳送。",
+    en: "Request text contains a reserved alias. Change the text or mapping. Request not sent.",
+    ja: "予約済みの別名が含まれています。テキストまたはルールを変更してください。未送信です。",
+    ru: "Текст содержит зарезервированный псевдоним. Измените текст или правила. Запрос не отправлен.",
+  },
+  text_transform_residual: {
+    "zh-CN": "出站请求仍包含受保护文本，无法安全改写。请求未发送。",
+    "zh-TW": "傳出請求仍包含受保護文字，無法安全改寫。請求未傳送。",
+    en: "The outgoing request still contains protected text that cannot be safely rewritten. Request not sent.",
+    ja: "安全に置換できない保護対象のテキストが残っています。リクエストは未送信です。",
+    ru: "Запрос содержит защищённый текст, который нельзя безопасно заменить. Запрос не отправлен.",
+  },
+  text_transform_unsupported: {
+    "zh-CN": "文本保护无法处理此请求格式。请求未发送。",
+    "zh-TW": "文字保護無法處理此請求格式。請求未傳送。",
+    en: "Text protection cannot process this request format. Request not sent.",
+    ja: "テキスト保護がこの形式に対応していません。リクエストは未送信です。",
+    ru: "Защита текста не поддерживает этот формат. Запрос не отправлен.",
+  },
+  text_transform_response: {
+    "zh-CN": "响应文本还原失败，请重试。",
+    "zh-TW": "回應文字還原失敗，請重試。",
+    en: "Response text restoration failed. Please retry.",
+    ja: "応答テキストの復元に失敗しました。再試行してください。",
+    ru: "Не удалось восстановить текст ответа. Повторите запрос.",
+  },
   remote_compaction_failed: {
     "zh-CN": "远程压缩失败，请稍后重试。",
     "zh-TW": "遠端壓縮失敗，請稍後重試。",

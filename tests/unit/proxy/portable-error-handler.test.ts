@@ -37,6 +37,7 @@ vi.mock("@/lib/logger", () => ({ logger: mocks.logger }));
 import { PortableCompatibilityError } from "@/app/v1/_lib/proxy/codex-portable-compatibility/errors";
 import { ProxyErrorHandler } from "@/app/v1/_lib/proxy/error-handler";
 import type { ProxySession } from "@/app/v1/_lib/proxy/session";
+import { TextTransformError } from "@/app/v1/_lib/proxy/text-transform";
 import type { SpecialSetting } from "@/types/special-settings";
 
 function makeSession(sentinel: string): ProxySession {
@@ -68,6 +69,16 @@ function makeSession(sentinel: string): ProxySession {
 }
 
 describe("portable compatibility error persistence", () => {
+  test("文本保护错误返回稳定错误码和本地化消息，不暴露请求正文", async () => {
+    const session = makeSession("wingjoy.cn");
+    session.headers.set("accept-language", "zh-CN");
+    const response = await ProxyErrorHandler.handle(session, new TextTransformError("collision"));
+    const body = await response.json();
+    expect(response.status).toBe(400);
+    expect(body.error.type).toBe("text_transform_collision");
+    expect(body.error.message).toContain("保留代称");
+    expect(JSON.stringify(body)).not.toContain("wingjoy");
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.updateDetails.mockResolvedValue(undefined);

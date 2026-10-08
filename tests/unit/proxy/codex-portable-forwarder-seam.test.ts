@@ -198,6 +198,58 @@ function bodyText(body: BodyInit | null | undefined): string {
 }
 
 describe("portable compatibility proxy seams", () => {
+  test.each(["/v1/alpha/search", "/v1/alpha/search/?limit=5", "/v1/responses"])(
+    "供应商生成参数只应覆写生成请求，不能污染搜索请求 %s",
+    async (path) => {
+      const provider = {
+        ...makeProvider(),
+        codexMultiAgentV2Mode: "native",
+        codexServiceTierPreference: "priority",
+        codexReasoningEffortPreference: "high",
+        codexParallelToolCallsPreference: "true",
+        codexTextVerbosityPreference: "low",
+        codexImageGenerationPreference: "true",
+      } as Provider;
+      const isSearch = path.startsWith("/v1/alpha/search");
+      const session = makeSession(provider);
+      session.request.message = isSearch
+        ? { model: "gpt-6.1-sol", query: "搜索回归测试" }
+        : { model: "gpt-6.1-sol", input: [] };
+      session.requestUrl = new URL(`https://proxy.example.com${path}`);
+      Object.assign(session, { endpointPolicy: resolveEndpointPolicy(path) });
+      const original = structuredClone(session.request.message);
+      const fetch = vi
+        .spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode")
+        .mockImplementationOnce(async (_url: string, init: RequestInit) => {
+          const sent = JSON.parse(bodyText(init.body));
+          if (isSearch) {
+            expect(sent).toEqual(original);
+          } else {
+            expect(sent.service_tier).toBe("priority");
+            expect(sent.reasoning.effort).toBe("high");
+          }
+          return Response.json({});
+        });
+      const { doForward } = ProxyForwarder as unknown as {
+        doForward: (s: ProxySession, p: Provider, url: string) => Promise<Response>;
+      };
+      try {
+        await doForward(session, provider, provider.url);
+        expect(fetch).toHaveBeenCalledOnce();
+        if (isSearch) {
+          expect(session.getSpecialSettings()).not.toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ type: "provider_parameter_override" }),
+            ])
+          );
+        }
+      } finally {
+        (session as unknown as { clearResponseTimeout?: () => void }).clearResponseTimeout?.();
+        fetch.mockRestore();
+      }
+    }
+  );
+
   test.each(["/v1/responses", "/v1/responses/compact", "/v1/messages/count_tokens"])(
     "文本保护覆盖真实发送边界和透传端点 %s",
     async (path) => {

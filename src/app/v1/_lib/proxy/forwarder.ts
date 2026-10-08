@@ -71,6 +71,7 @@ import {
 } from "./codex-portable-compatibility";
 import { combineAbortSignals } from "./combine-abort-signals";
 import { isStandardProxyEndpointPath } from "./endpoint-family-catalog";
+import { normalizeEndpointPath } from "./endpoint-paths";
 import { resolveEndpointPolicy, shouldEnforceStrictEndpointPoolPolicy } from "./endpoint-policy";
 import {
   ALL_PROVIDERS_UNAVAILABLE_MESSAGE,
@@ -2593,8 +2594,12 @@ export class ProxyForwarder {
     } else {
       // --- STANDARD HANDLING ---
       if (!ProxyForwarder.getEndpointPolicy(session).bypassForwarderPreprocessing) {
+        // 搜索接口不接受 service_tier 等生成参数，保留客户端原始搜索请求。
         // Codex 供应商级参数覆写（默认 inherit=遵循客户端）
-        if (provider.providerType === "codex") {
+        if (
+          provider.providerType === "codex" &&
+          normalizeEndpointPath(session.requestUrl.pathname) !== "/v1/alpha/search"
+        ) {
           const { request: overridden, audit } = applyCodexProviderOverridesWithAudit(
             provider,
             session.request.message as Record<string, unknown>

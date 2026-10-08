@@ -505,22 +505,71 @@ function buildEndpointAttemptKey(endpointId: number | null, endpointUrl: string)
 // connectTimeout 属于 Dispatcher/Client 配置（已在全局 Agent / ProxyAgent 里处理）。
 
 /**
- * 过滤私有参数（下划线前缀）
- *
- * 目的：防止私有参数（下划线前缀）泄露到上游供应商导致 "Unsupported parameter" 错误
- *
- * @param obj - 原始请求对象
- * @returns 过滤后的请求对象
+ * Collect schemas only from recognized request tool containers, not arbitrary metadata.
  */
-function filterPrivateParameters(obj: unknown): unknown {
+function collectToolParameterSchemas(request: unknown): WeakSet<object> {
+  const schemas = new WeakSet<object>();
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === "object" && value !== null && !Array.isArray(value);
+  const addSchema = (schema: unknown) => {
+    if (isRecord(schema)) schemas.add(schema);
+  };
+  const visitTools = (tools: unknown) => {
+    if (!Array.isArray(tools)) return;
+    for (const tool of tools) {
+      if (!isRecord(tool)) continue;
+      if (tool.type === "namespace" && typeof tool.name === "string") {
+        visitTools(tool.tools);
+      } else if (tool.type === "function") {
+        if (typeof tool.name === "string") addSchema(tool.parameters);
+        if (isRecord(tool.function) && typeof tool.function.name === "string") {
+          addSchema(tool.function.parameters);
+        }
+      } else if (
+        (tool.type === undefined || tool.type === "custom") &&
+        typeof tool.name === "string"
+      ) {
+        addSchema(tool.input_schema);
+      }
+      if (Array.isArray(tool.functionDeclarations)) {
+        for (const declaration of tool.functionDeclarations) {
+          if (!isRecord(declaration) || typeof declaration.name !== "string") continue;
+          addSchema(declaration.parameters);
+          addSchema(declaration.parametersJsonSchema);
+        }
+      }
+    }
+  };
+  if (isRecord(request)) {
+    visitTools(request.tools);
+    if (Array.isArray(request.input)) {
+      for (const item of request.input) {
+        if (isRecord(item) && item.type === "additional_tools") visitTools(item.tools);
+      }
+    }
+  }
+  return schemas;
+}
+
+/** Remove private request fields while preserving complete tool parameter schemas. */
+function filterPrivateParameters(
+  obj: unknown,
+  toolSchemas = collectToolParameterSchemas(obj)
+): unknown {
   // 非对象类型直接返回
   if (typeof obj !== "object" || obj === null) {
     return obj;
   }
 
+  // Schema definition and property names are user data, including underscore-prefixed keys.
+  // Only schemas found in protocol tool containers are exempt from private-field filtering.
+  if (toolSchemas.has(obj)) {
+    return structuredClone(obj);
+  }
+
   // 数组类型递归处理
   if (Array.isArray(obj)) {
-    return obj.map((item) => filterPrivateParameters(item));
+    return obj.map((item) => filterPrivateParameters(item, toolSchemas));
   }
 
   // 对象类型：过滤下划线前缀的键
@@ -533,7 +582,7 @@ function filterPrivateParameters(obj: unknown): unknown {
       removedKeys.push(key);
     } else {
       // 公开参数：递归过滤值
-      filtered[key] = filterPrivateParameters(value);
+      filtered[key] = filterPrivateParameters(value, toolSchemas);
     }
   }
 

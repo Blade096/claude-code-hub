@@ -340,6 +340,95 @@ describe("portable compatibility proxy seams", () => {
     mocks.provider = null;
   });
 
+  test.each([
+    "responses",
+    "namespace",
+    "history",
+    "chat",
+    "anthropic",
+    "gemini",
+    "gemini-json-schema",
+  ])("preserves tool schemas while cleaning private fields: %s", async (format) => {
+    const schema = {
+      type: "object",
+      properties: { _argument: { $ref: "#/$defs/__schema0" } },
+      $defs: { __schema0: { type: "string", enum: ["view", "update"] } },
+      required: ["_argument"],
+      additionalProperties: false,
+    };
+    const tool = {
+      type: "function",
+      name: "automation_update",
+      parameters: schema,
+      _toolInternal: true,
+    };
+    const namespace = { type: "namespace", name: "mcp__codex_app", tools: [tool] };
+    const body: Record<string, unknown> = { tools: [tool], input: [] };
+    let schemaPath = ["tools", "0", "parameters"];
+    if (format === "namespace") {
+      body.tools = [namespace];
+      schemaPath = ["tools", "0", "tools", "0", "parameters"];
+    } else if (format === "history") {
+      body.tools = [];
+      body.input = [{ type: "additional_tools", tools: [namespace], _inputInternal: true }];
+      schemaPath = ["input", "0", "tools", "0", "tools", "0", "parameters"];
+    } else if (format === "chat") {
+      body.tools = [{ type: "function", function: tool, _toolInternal: true }];
+      schemaPath = ["tools", "0", "function", "parameters"];
+    } else if (format === "anthropic") {
+      body.tools = [{ name: "automation_update", input_schema: schema, _toolInternal: true }];
+      schemaPath = ["tools", "0", "input_schema"];
+    } else if (format.startsWith("gemini")) {
+      const key = format === "gemini" ? "parameters" : "parametersJsonSchema";
+      body.tools = [{ functionDeclarations: [{ name: "automation_update", [key]: schema }] }];
+      schemaPath = ["tools", "0", "functionDeclarations", "0", key];
+    }
+    body._requestInternal = true;
+    body.metadata = {
+      _private: true,
+      parameters: { _private: true, visible: "keep" },
+      function: { name: "fake_tool", parameters: { _private: true, visible: "keep" } },
+      tools: [{ type: "function", name: "fake_tool", parameters: { _private: true } }],
+    };
+    const provider = { ...makeProvider(), codexMultiAgentV2Mode: "native" as const };
+    const session = makeSession(provider, body);
+    const original = structuredClone(session.request.message);
+    let upstreamBody: Record<string, unknown> = {};
+    const fetch = vi
+      .spyOn(ProxyForwarder as never, "fetchWithoutAutoDecode")
+      .mockImplementationOnce(async (_url: string, init: RequestInit) => {
+        upstreamBody = JSON.parse(bodyText(init.body));
+        return new Response("{}", { status: 200 });
+      });
+    try {
+      const { doForward } = ProxyForwarder as unknown as {
+        doForward: (
+          session: ProxySession,
+          provider: Provider,
+          baseUrl: string
+        ) => Promise<Response>;
+      };
+      await doForward(session, provider, provider.url);
+      const actualSchema = schemaPath.reduce<unknown>(
+        (value, key) => (value as Record<string, unknown>)[key],
+        upstreamBody
+      );
+      expect(actualSchema).toEqual(schema);
+      expect(upstreamBody).not.toHaveProperty("_requestInternal");
+      expect(JSON.stringify(upstreamBody)).not.toContain("_toolInternal");
+      expect(JSON.stringify(upstreamBody)).not.toContain("_inputInternal");
+      expect(upstreamBody.metadata).toEqual({
+        parameters: { visible: "keep" },
+        function: { name: "fake_tool", parameters: { visible: "keep" } },
+        tools: [{ type: "function", name: "fake_tool", parameters: {} }],
+      });
+      expect(session.request.message).toEqual(original);
+    } finally {
+      (session as unknown as { clearResponseTimeout?: () => void }).clearResponseTimeout?.();
+      fetch.mockRestore();
+    }
+  });
+
   test("sends portable payload to mock upstream and restores the response in dispatch", async () => {
     const provider = makeProvider();
     const session = makeSession(provider);

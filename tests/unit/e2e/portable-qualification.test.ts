@@ -998,7 +998,7 @@ describe("portable qualification isolated rollout evidence", () => {
     });
   }
 
-  function completeRootRollout(): string {
+  function completeRootRollout(target = childThread.agentPath): string {
     return [
       functionCall(10, "spawn_agent", "call-spawn", {
         task_name: "deepseek-child",
@@ -1010,14 +1010,14 @@ describe("portable qualification isolated rollout evidence", () => {
       functionOutput(20, "call-spawn"),
       activity(30, "call-spawn", "started"),
       functionCall(40, "send_message", "call-send", {
-        target: childThread.agentPath,
+        target,
         message: sentinels[2],
       }),
       functionOutput(50, "call-send"),
       activity(60, "call-send", "interacted"),
       activity(70, "completion-one", "completed"),
       functionCall(80, "followup_task", "call-followup", {
-        target: childThread.agentPath,
+        target,
         message: sentinels[3],
       }),
       functionOutput(90, "call-followup"),
@@ -1090,6 +1090,23 @@ describe("portable qualification isolated rollout evidence", () => {
       childReceivedToolProhibition: true,
     });
   });
+
+  test.each([childThread.id, "deepseek-child", "unrelated-thread"])(
+    "validates lifecycle targets by the actual child identity: %s",
+    (target) => {
+      const trace = analyzeLifecycleRollouts({
+        rootThread,
+        childThread,
+        rootJsonl: completeRootRollout(target),
+        childJsonl: childRollout,
+        startedAt,
+        sentinels,
+        historyMode: "recent",
+      });
+      expect(trace.sendWhileRunning).toBe(target !== "unrelated-thread");
+      expect(trace.followupAfterCompletion).toBe(target !== "unrelated-thread");
+    }
+  );
 
   test("uses rollout order when send and completion share one timestamp", () => {
     const rootJsonl = completeRootRollout().replace(

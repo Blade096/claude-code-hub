@@ -12,6 +12,33 @@ import type { ProxySession } from "@/app/v1/_lib/proxy/session";
 
 const LEGACY_METADATA_USER_ID =
   "user_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_account__session_sess_legacy_123";
+
+describe("T3 Code 的 Codex 客户端识别", () => {
+  const userAgent = "T3 Code/0.159.3 (Windows 10.0.19045; x86_64) unknown (T3 Code; 0.0.45)";
+
+  test("识别真实 T3 Code 请求并复用 Codex 白名单", () => {
+    const session = createMockSession({ userAgent });
+    expect(detectClientFull(session, "codex-cli").matched).toBe(true);
+    expect(matchClientPattern(session, "codex-cli")).toBe(true);
+    expect(isClientAllowedDetailed(session, ["codex-cli"], []).allowed).toBe(true);
+  });
+
+  test("Codex 黑名单同样适用于 T3 Code", () => {
+    const session = createMockSession({ userAgent });
+    expect(isClientAllowedDetailed(session, [], ["codex-cli"]).matchType).toBe("blocklist_hit");
+  });
+
+  test.each(["Other App/1.0 T3 Code/0.159.3", "T3 Code Helper/0.159.3", "T3 Codes/0.159.3"])(
+    "不把非 T3 Code 客户端 %s 识别为 Codex",
+    (userAgent) => {
+      expect(detectClientFull(createMockSession({ userAgent }), "codex-cli").matched).toBe(false);
+    }
+  );
+
+  test("保留其他 Codex 子客户端的边界", () => {
+    expect(detectClientFull(createMockSession({ userAgent }), "codex_vscode").matched).toBe(false);
+  });
+});
 const JSON_METADATA_USER_ID = JSON.stringify({
   device_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   account_uuid: "",
@@ -85,13 +112,12 @@ describe("client-detector", () => {
       expect(isBuiltinKeyword(pattern)).toBe(true);
     });
 
-    test.each([
-      "gemini-cli",
-      "codex-cli",
-      "custom-pattern",
-    ])("should return false for non-builtin keyword: %s", (pattern) => {
-      expect(isBuiltinKeyword(pattern)).toBe(false);
-    });
+    test.each(["gemini-cli", "codex-cli", "custom-pattern"])(
+      "should return false for non-builtin keyword: %s",
+      (pattern) => {
+        expect(isBuiltinKeyword(pattern)).toBe(false);
+      }
+    );
   });
 
   describe("confirmClaudeCodeSignals via detectClientFull", () => {

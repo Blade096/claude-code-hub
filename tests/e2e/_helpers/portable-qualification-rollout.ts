@@ -219,6 +219,18 @@ export function analyzeLifecycleRollouts(options: {
   const send = calls.send_message.length === 1 ? calls.send_message[0]! : null;
   const followup = calls.followup_task.length === 1 ? calls.followup_task[0]! : null;
   const childAgentPath = childThread.agentPath ?? "";
+  const parentAgentPath = rootThread.agentPath ?? "/root";
+  const relativeChildPath = childAgentPath.startsWith(`${parentAgentPath}/`)
+    ? childAgentPath.slice(parentAgentPath.length + 1)
+    : null;
+  const targetsChild = (call: ToolCall) => {
+    const target = stringArgument(call, "target");
+    return (
+      target === childAgentPath ||
+      target === childThread.id ||
+      (relativeChildPath !== null && target === relativeChildPath)
+    );
+  };
   const activities = root.activities.filter(
     (activity) =>
       activity.agentThreadId === childThread.id &&
@@ -278,7 +290,7 @@ export function analyzeLifecycleRollouts(options: {
       send &&
         sendInteraction &&
         firstCompletion &&
-        stringArgument(send, "target") === childAgentPath &&
+        targetsChild(send) &&
         send.order < firstCompletion.order
     ),
     followupAfterCompletion: Boolean(
@@ -286,7 +298,7 @@ export function analyzeLifecycleRollouts(options: {
         followupInteraction &&
         firstCompletion &&
         secondCompletion &&
-        stringArgument(followup, "target") === childAgentPath &&
+        targetsChild(followup) &&
         firstCompletion.order < followup.order &&
         followup.order < secondCompletion.order
     ),

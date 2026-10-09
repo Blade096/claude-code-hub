@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   hasCodexMultiAgentV2ToolSchema,
   isCodexMultiAgentV2Request,
+  isPortableCodexMultiAgentV2Request,
   ProxyCodexMultiAgentV2Gate,
 } from "@/app/v1/_lib/proxy/codex-multi-agent-v2-gate";
 import { CHAT_PIPELINE } from "@/app/v1/_lib/proxy/guard-pipeline";
@@ -61,6 +62,17 @@ describe("Codex MultiAgentV2 provider gate", () => {
         input: [{ type: "additional_tools", tools: [collaborationNamespace("followup_task")] }],
       })
     ).toBe(true);
+  });
+
+  test("T3 Code 的 additional_tools 能进入多代理兼容流程", async () => {
+    const session = createSession("native", {
+      input: [{ type: "additional_tools", tools: [collaborationNamespace()] }],
+    });
+    session.userAgent = "T3 Code/0.159.3 (Windows 10.0.19045; x86_64) unknown (T3 Code; 0.0.45)";
+    mocks.getCachedSystemSettings.mockResolvedValue({ enableCodexMultiAgentV2Compatibility: true });
+    expect(isCodexMultiAgentV2Request(session)).toBe(true);
+    expect(isPortableCodexMultiAgentV2Request(session, true)).toBe(true);
+    expect(await ProxyCodexMultiAgentV2Gate.ensure(session)).toBeNull();
   });
 
   test("recognizes a real Codex subagent turn after collaboration tools are stripped", () => {

@@ -156,26 +156,24 @@ describe("openai-image-compat - generations constraints", () => {
     expect(result.ok).toBe(true);
   });
 
-  it.each([
-    "gpt-image-2",
-    "gpt-image-2.5",
-    "gpt-image-2.5-flare",
-    "gpt-image-2.5-sunburst",
-  ])("passes through %s generations until its API matrix is documented", async (model) => {
-    const result = await validateOpenAIImageRequest({
-      pathname: "/v1/images/generations",
-      body: {
-        model,
-        prompt: "otter",
-        background: "transparent",
-        output_format: "png",
-        size: "2048x2048",
-        response_format: "url",
-      },
-    });
+  it.each(["gpt-image-2", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"])(
+    "passes through %s generations until its API matrix is documented",
+    async (model) => {
+      const result = await validateOpenAIImageRequest({
+        pathname: "/v1/images/generations",
+        body: {
+          model,
+          prompt: "otter",
+          background: "transparent",
+          output_format: "png",
+          size: "2048x2048",
+          response_format: "url",
+        },
+      });
 
-    expect(result.ok).toBe(true);
-  });
+      expect(result.ok).toBe(true);
+    }
+  );
 });
 
 describe("openai-image-compat - edits constraints", () => {

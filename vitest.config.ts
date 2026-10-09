@@ -8,7 +8,9 @@ const isIntegrationFileFilterRequested = process.argv.some((arg) =>
 
 function defaultMaxWorkers(): number {
   const workerBudget = Math.floor(availableParallelism() * 0.75);
-  return Math.min(8, Math.max(2, workerBudget));
+  // Windows 上大量模块同时加载会触发单测超时；保留原时限并限制并行度。
+  const workerCap = process.platform === "win32" ? 4 : 8;
+  return Math.min(workerCap, Math.max(2, workerBudget));
 }
 
 export default defineConfig({
@@ -20,6 +22,7 @@ export default defineConfig({
         extends: true,
         test: {
           environment: "happy-dom",
+          setupFiles: ["./tests/setup.ts", "./tests/setup-ui.ts"],
           include: [
             "tests/unit/**/*.{test,spec}.tsx",
             "tests/security/**/*.{test,spec}.{ts,tsx}",
@@ -98,7 +101,7 @@ export default defineConfig({
     // ==================== 并发配置 ====================
     maxConcurrency: 5, // 最大并发测试数
     pool: "threads", // 使用线程池（推荐）
-    // 依据可用 CPU 自动调节，但上限保持 8，避免高核机器过度并行拖垮长尾测试。
+    // 依据可用 CPU 自动调节：Windows 上限 4，其他平台上限 8。
     // 允许通过环境变量覆盖：VITEST_MAX_WORKERS=8 或 VITEST_MAX_WORKERS=75%。
     maxWorkers: parseWorkerLimit(process.env.VITEST_MAX_WORKERS, defaultMaxWorkers()),
 

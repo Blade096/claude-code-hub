@@ -471,6 +471,8 @@ describe("ProxyResponseHandler - Gemini stream passthrough timeouts", () => {
         }
       ).doForward;
 
+      // 首字节计时从转发开始；读取响应体前已经消耗的时间也属于超时窗口。
+      const startedAt = performance.now();
       const upstreamResponse = (await doForward.call(
         ProxyForwarder,
         session,
@@ -483,7 +485,6 @@ describe("ProxyResponseHandler - Gemini stream passthrough timeouts", () => {
       expect(reader).toBeTruthy();
       if (!reader) throw new Error("Missing body reader");
 
-      const startedAt = Date.now();
       const firstRead = await readWithTimeout(reader, 1500);
       if (!firstRead.ok) {
         clientAbortController.abort(new Error("test_timeout"));
@@ -499,7 +500,7 @@ describe("ProxyResponseHandler - Gemini stream passthrough timeouts", () => {
       expect(sessionWithController.responseController?.signal.aborted).toBe(true);
 
       // 粗略时间断言：不应立即返回（避免“无关早退”导致假阳性）
-      const elapsed = Date.now() - startedAt;
+      const elapsed = performance.now() - startedAt;
       expect(elapsed).toBeGreaterThanOrEqual(120);
     } finally {
       clientAbortController.abort(new Error("test_cleanup"));

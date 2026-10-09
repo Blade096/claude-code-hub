@@ -1,12 +1,14 @@
 # syntax=docker/dockerfile:1
 
-# 构建阶段：使用 Bun（快速包管理和构建）
-FROM --platform=$BUILDPLATFORM oven/bun:debian AS build-base
+# 构建阶段：Bun 安装依赖，Node 执行 Next.js，与运行阶段保持一致。
+FROM --platform=$BUILDPLATFORM oven/bun:1.3.10-debian AS bun-runtime
+FROM --platform=$BUILDPLATFORM node:trixie-slim AS build-base
+COPY --from=bun-runtime /usr/local/bin/bun /usr/local/bin/bun
 WORKDIR /app
 
 FROM build-base AS deps
-COPY package.json ./
-RUN bun install
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
 
 FROM deps AS build
 COPY . .

@@ -133,6 +133,7 @@ describe("ProxyForwarder provider failure session release", () => {
       setCacheTtlResolved: setTargetCacheTtlResolved,
       getContext1mApplied: vi.fn(() => false),
       setContext1mApplied: setTargetContext1mApplied,
+      setPortableTransformationMetadata: vi.fn(),
     } as unknown as ProxySession;
     const source = {
       request: { message: "winner", buffer: null, log: null, note: null },
@@ -147,6 +148,7 @@ describe("ProxyForwarder provider failure session release", () => {
       setCacheTtlResolved: vi.fn(),
       getContext1mApplied: vi.fn(() => true),
       setContext1mApplied: vi.fn(),
+      getPortableTransformationMetadata: vi.fn(() => null),
       clearResponseTimeout,
       responseController,
       releaseAgent,
@@ -165,5 +167,6 @@ describe("ProxyForwarder provider failure session release", () => {
     );
     expect(setTargetCacheTtlResolved).toHaveBeenCalledWith("5m");
     expect(setTargetContext1mApplied).toHaveBeenCalledWith(true);
+    expect(target.setPortableTransformationMetadata).toHaveBeenCalledWith(null);
   });
 });

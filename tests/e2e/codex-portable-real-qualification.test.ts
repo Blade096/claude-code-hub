@@ -279,7 +279,7 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
     );
   }
 
-  const nativeCase = cases.find((item) => item.providerKind === "native")!;
+  const nativeCase = cases.find((item) => item.caseId === "native_root_control_sse")!;
   test(
     nativeCase.caseId,
     async () => {
@@ -331,13 +331,18 @@ runReal("real Codex MultiAgentV2 portable qualification", () => {
       requireQualification(
         [
           "spawn_agent_message_schema",
-          "send_message_message_schema",
-          "followup_task_message_schema",
           "collaboration_namespace",
           "spawn_agent_routing_instruction",
         ].every((transformation) =>
           nativePreparationAudit.transformations.includes(transformation)
-        ) && !nativePreparationAudit.transformations.includes("agent_message_input"),
+        ) &&
+          ![
+            "send_message_message_schema",
+            "followup_task_message_schema",
+            "agent_message_input",
+          ].some((transformation) =>
+            nativePreparationAudit.transformations.includes(transformation)
+          ),
         nativeCase.caseId,
         "native root audit does not match tool-only preparation"
       );

@@ -193,7 +193,7 @@ jobs:
         if: steps.check.outputs.needs_bump == 'true' || github.event_name == 'workflow_dispatch'
         uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Setup Bun
         if: steps.check.outputs.needs_bump == 'true' || github.event_name == 'workflow_dispatch'
@@ -206,8 +206,8 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.bun/install/cache
-          # This repo intentionally does not track Bun lockfiles; rotate cache on package/runtime inputs.
-          key: ${{ runner.os }}-bun-${{ hashFiles('package.json', '.bun-version') }}
+          # 根据依赖锁文件和运行时版本更新下载缓存。
+          key: ${{ runner.os }}-bun-${{ hashFiles('package.json', 'bun.lock', '.bun-version') }}
           restore-keys: |
             ${{ runner.os }}-bun-
 
@@ -215,8 +215,8 @@ jobs:
         if: steps.check.outputs.needs_bump == 'true' || github.event_name == 'workflow_dispatch'
         timeout-minutes: 15
         run: |
-          # No lockfile is committed in this repository, so use a non-frozen install.
-          bun install
+          # 严格按提交的锁文件安装，避免依赖版本漂移。
+          bun install --frozen-lockfile
           bun run typecheck
           bun run format
 

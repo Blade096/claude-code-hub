@@ -37,6 +37,10 @@ const normalize = (s: string) => s.toLowerCase().replace(/[-_]/g, "");
 // All matchValues must be lowercase (pattern is lowercased before lookup)
 const CODEX_FAMILY_RULES: Array<{ test: RegExp; matchValues: Set<string> }> = [
   {
+    test: /^t3 code\//i,
+    matchValues: new Set(["codex-cli", "t3 code"]),
+  },
+  {
     test: /^codex desktop\b/i,
     matchValues: new Set(["codex-cli", "codex desktop"]),
   },

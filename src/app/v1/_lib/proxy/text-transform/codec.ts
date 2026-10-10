@@ -57,6 +57,7 @@ export function transformJson(
 ): unknown {
   const matcher = new LiteralMatcher(config, reverse);
   const aliases = new LiteralMatcher(config, true);
+  const signedThinkingPassthrough = new WeakSet<object>();
   const replace = (text: string): string => {
     const output = matcher.replace(text);
     if (!reverse) {
@@ -90,9 +91,17 @@ export function transformJson(
         obj.type === "thinking_delta" ||
         obj.type === "signature_delta")
     ) {
-      if (!reverse && matcher.contains(JSON.stringify(obj)))
+      // 图片里的原词可能进入历史思考；带签名块按约定整体透传，不能改写签名正文。
+      const signedThinking =
+        (obj.type === "thinking" &&
+          typeof obj.signature === "string" &&
+          obj.signature.length > 0) ||
+        (typeof obj.thoughtSignature === "string" && obj.thoughtSignature.length > 0);
+      if (!reverse && !signedThinking && matcher.contains(JSON.stringify(obj)))
         throw new TextTransformError("residual", language);
-      return structuredClone(obj);
+      const preserved = structuredClone(obj);
+      if (signedThinking) signedThinkingPassthrough.add(preserved);
+      return preserved;
     }
     const result: JsonObject = {};
     for (const [key, child] of Object.entries(obj)) {
@@ -148,7 +157,7 @@ export function transformJson(
   };
   const result = visit(value, "$");
   if (!reverse) {
-    // 再遍历转换结果可发现跨替换边界形成的原词，附件仍按约定排除。
+    // 再遍历转换结果可发现跨替换边界形成的原词，附件和签名思考按约定排除。
     const scan = (node: unknown): void => {
       if (typeof node === "string") {
         if (matcher.contains(node)) throw new TextTransformError("residual", language);
@@ -160,6 +169,7 @@ export function transformJson(
       }
       if (!node || typeof node !== "object") return;
       const obj = node as JsonObject;
+      if (signedThinkingPassthrough.has(obj)) return;
       if (typeof obj.type === "string" && ATTACHMENT_TYPES.has(obj.type)) return;
       for (const [k, v] of Object.entries(obj)) {
         if (ATTACHMENT_KEYS.has(k)) continue;

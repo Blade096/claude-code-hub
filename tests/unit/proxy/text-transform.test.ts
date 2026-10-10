@@ -107,12 +107,56 @@ describe("请求覆盖与隔离", () => {
       transformJson({ input: "İ WINGJOY.CN" }, { ...config, caseSensitive: false }, false)
     ).toEqual({ input: "İ site-k7m2.b.invalid" });
   });
-  it("签名思考块保持完整，真实词无法安全改写时拒绝", () => {
-    const thinking = { type: "thinking", thinking: "site-k7m2", signature: "sig" };
-    expect(transformJson(thinking, config, true)).toEqual(thinking);
-    expect(() => transformJson({ ...thinking, thinking: "wingjoy" }, config, false)).toThrow(
-      TextTransformError
+  it("带签名的历史思考块含原词时原样透传，普通文本继续转换", async () => {
+    const thinking = {
+      type: "thinking",
+      thinking: "截图里是 wingjoy.cn",
+      signature: "sig-wingjoy",
+    };
+    const body = {
+      messages: [
+        { role: "assistant", content: [thinking] },
+        { role: "user", content: [{ type: "text", text: "wingjoy.cn" }] },
+      ],
+    };
+    const result = JSON.parse(
+      (await transformRequestBody(JSON.stringify(body), new Headers(), config)) as string
     );
+    expect(result.messages[0].content[0]).toEqual(thinking);
+    expect(result.messages[1].content[0].text).toBe("site-k7m2.b.invalid");
+    expect(transformJson(result, config, true)).toEqual(body);
+    expect(body.messages[1].content[0]).toEqual({ type: "text", text: "wingjoy.cn" });
+  });
+  it("签名思考的豁免不影响其他协议字段的残留检查", () => {
+    const body = {
+      id: "wingjoy",
+      content: [{ type: "thinking", thinking: "wingjoy", signature: "sig" }],
+    };
+    expect(() => transformJson(body, config, false)).toThrow(TextTransformError);
+  });
+  it("工具业务参数中的同名签名结构仍按普通业务文本转换", () => {
+    const body = {
+      type: "tool_use",
+      input: { type: "thinking", thinking: "wingjoy", signature: "wingjoy" },
+    };
+    expect(transformJson(body, config, false)).toEqual({
+      type: "tool_use",
+      input: { type: "thinking", thinking: "site-k7m2", signature: "site-k7m2" },
+    });
+  });
+  it("Gemini 带签名的思考内容和签名原样透传", () => {
+    const body = {
+      contents: [{ parts: [{ thought: true, text: "wingjoy", thoughtSignature: "sig-wingjoy" }] }],
+    };
+    expect(transformJson(body, config, false)).toEqual(body);
+    expect(transformJson(body, config, true)).toEqual(body);
+  });
+  it.each([
+    { type: "thinking", thinking: "wingjoy" },
+    { type: "thinking", thinking: "wingjoy", signature: "" },
+    { thought: true, text: "wingjoy", thoughtSignature: "" },
+  ])("没有有效签名的思考块仍拒绝原词残留 %j", (body) => {
+    expect(() => transformJson(body, config, false)).toThrow(TextTransformError);
   });
   it("覆盖四种协议文本且不修改原对象", () => {
     const body = {
